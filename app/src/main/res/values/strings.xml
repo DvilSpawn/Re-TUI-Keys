@@ -22,10 +22,11 @@
     <string name="setting_local_suggestions">Local suggestions</string>
     <string name="setting_local_suggestions_summary">Shows offline word suggestions from this device only.</string>
     <string name="setting_learn_local_words">Learn local words</string>
-    <string name="setting_learn_local_words_summary">Adds custom typed words to this keyboard dictionary.</string>
+    <string name="setting_learn_local_words_summary">Ranks saved custom words after you use them.</string>
     <string name="setting_dictionary_add_hint">word</string>
-    <string name="setting_dictionary_backup">Backup dictionary</string>
-    <string name="setting_dictionary_restore">Restore dictionary</string>
+    <string name="setting_dictionary_edit">Edit user dictionary</string>
+    <string name="setting_profile_backup">Backup keyboard profile</string>
+    <string name="setting_profile_restore">Restore keyboard profile</string>
     <string name="setting_no_background">No background image</string>
     <string name="setting_background_selected">Background image selected</string>
     <string name="setting_pick_background">Pick background image</string>

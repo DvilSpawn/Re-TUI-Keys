@@ -12,26 +12,30 @@ object LocalDictionary {
     private const val MAX_WORD_LENGTH = 32
 
     private val builtInWords = listOf(
-        "about", "above", "after", "again", "against", "almost", "already", "also", "always",
-        "android", "another", "answer", "anything", "around", "because", "before", "being",
-        "between", "build", "calendar", "called", "change", "check", "command", "could",
-        "daily", "delete", "device", "does", "done", "during", "email", "enough", "error",
-        "every", "feedback", "field", "first", "from", "great", "hello", "help", "home",
-        "input", "issue", "keyboard", "launcher", "layout", "local", "looks", "message",
-        "mobile", "music", "needs", "never", "notes", "nothing", "number", "offline",
-        "output", "phone", "please", "progress", "quick", "really", "restore", "right",
-        "screen", "search", "send", "settings", "should", "space", "still", "storage",
-        "suggest", "system", "terminal", "thanks", "that", "their", "there", "these",
-        "thing", "think", "this", "timer", "today", "toggle", "typing", "update", "user",
-        "using", "want", "what", "when", "where", "which", "while", "will", "with",
-        "word", "words", "work", "world", "would", "your"
-    )
+        "about", "above", "actually", "after", "again", "against", "almost", "already", "also", "always",
+        "android", "another", "answer", "anything", "around", "backup", "because", "before", "being",
+        "between", "better", "build", "calendar", "called", "change", "check", "command", "config",
+        "could", "custom", "daily", "delete", "device", "dictionary", "does", "done", "during",
+        "email", "enough", "error", "every", "feedback", "field", "first", "from", "great",
+        "hello", "height", "help", "home", "input", "issue", "keyboard", "launcher", "layout",
+        "local", "looks", "margin", "message", "mobile", "music", "needs", "never", "notes",
+        "nothing", "number", "offline", "output", "phone", "please", "preview", "profile",
+        "progress", "quick", "really", "restore", "right", "screen", "search", "send", "settings",
+        "should", "space", "still", "storage", "suggest", "system", "terminal", "thanks", "that",
+        "their", "there", "these", "thing", "think", "this", "timer", "today", "toggle", "touch",
+        "typing", "update", "user", "using", "value", "vibrate", "want", "what", "when", "where",
+        "which", "while", "will", "with", "word", "words", "work", "working", "world", "would", "your",
+        "i'm", "i'd", "i'll", "i've", "can't", "couldn't", "didn't", "doesn't", "don't", "hadn't",
+        "hasn't", "haven't", "isn't", "it's", "let's", "shouldn't", "that's", "there's", "they're",
+        "wasn't", "we're", "weren't", "what's", "won't", "wouldn't", "you're"
+    ).mapNotNull { normalizeWord(it) }.distinct()
 
     private val builtInSet = builtInWords.toHashSet()
 
     fun suggest(prefs: SharedPreferences, rawPrefix: String, limit: Int): List<String> {
         val safeLimit = limit.coerceIn(1, 8)
         val prefix = normalizeSearch(rawPrefix)
+        val searchPrefix = searchKey(prefix)
         val userWords = readEntries(prefs)
 
         val rankedUserWords = if (prefix.isBlank()) {
@@ -41,7 +45,7 @@ object LocalDictionary {
         } else {
             userWords
                 .asSequence()
-                .filter { it.word.startsWith(prefix) && it.word != prefix }
+                .filter { matchesPrefix(it.word, prefix, searchPrefix) && it.word != prefix }
                 .sortedWith(
                     compareByDescending<UserWordEntry> { it.frequency }
                         .thenByDescending { it.lastUsedAt }
@@ -54,21 +58,21 @@ object LocalDictionary {
         val rankedBuiltIns = if (prefix.isBlank()) {
             emptyList()
         } else {
-            builtInWords.filter { it.startsWith(prefix) && it != prefix }
+            builtInWords.filter { matchesPrefix(it, prefix, searchPrefix) && it != prefix }
         }
 
         return (rankedUserWords + rankedBuiltIns)
             .distinct()
             .take(safeLimit)
-            .map { applyPrefixCase(rawPrefix, it) }
+            .map { formatSuggestion(rawPrefix, it) }
     }
 
     fun learnTypedWord(prefs: SharedPreferences, rawWord: String, force: Boolean = false): Boolean {
         val word = normalizeWord(rawWord) ?: return false
-        if (!force && builtInSet.contains(word)) return false
         val entries = readEntries(prefs).associateBy { it.word }.toMutableMap()
         val now = System.currentTimeMillis()
         val current = entries[word]
+        if (current == null && (!force || builtInSet.contains(word))) return false
         entries[word] = if (current == null) {
             UserWordEntry(word = word, frequency = 1, lastUsedAt = now)
         } else {
@@ -106,10 +110,33 @@ object LocalDictionary {
         return builtInSet.contains(word)
     }
 
+    fun containsKnownWord(prefs: SharedPreferences, rawWord: String): Boolean {
+        return hasUserWord(prefs, rawWord) || isBuiltInWord(rawWord)
+    }
+
     fun userWords(prefs: SharedPreferences): List<UserWordEntry> {
         return readEntries(prefs).sortedWith(
             compareBy<UserWordEntry> { it.word }.thenByDescending { it.frequency }
         )
+    }
+
+    fun editableText(prefs: SharedPreferences): String {
+        return userWords(prefs).joinToString(separator = "\n") { displayWord(it.word) }
+    }
+
+    fun replaceUserWords(prefs: SharedPreferences, rawText: String): ImportResult {
+        val current = readEntries(prefs).associateBy { it.word }
+        val now = System.currentTimeMillis()
+        val words = rawText
+            .split(Regex("[,\\s]+"))
+            .mapNotNull { normalizeWord(it) }
+            .filterNot { builtInSet.contains(it) }
+            .distinct()
+        val entries = words.map { word ->
+            current[word] ?: UserWordEntry(word = word, frequency = 1, lastUsedAt = now)
+        }
+        writeEntries(prefs, entries)
+        return ImportResult(entries.size)
     }
 
     fun exportJson(prefs: SharedPreferences): String {
@@ -136,15 +163,50 @@ object LocalDictionary {
     }
 
     fun normalizeWord(rawWord: String): String? {
-        val trimmed = rawWord.trim().trim('\'').lowercase(Locale.US)
+        val trimmed = normalizeApostrophes(rawWord).trim().trim('\'').lowercase(Locale.US)
         if (trimmed.length < 2 || trimmed.length > MAX_WORD_LENGTH) return null
         if (!trimmed.any { it.isLetter() }) return null
         if (!trimmed.all { it.isLetter() || it == '\'' }) return null
         return trimmed
     }
 
+    fun displayWord(rawWord: String): String {
+        val word = normalizeWord(rawWord) ?: return rawWord.trim()
+        return when (word) {
+            "i'm" -> "I'm"
+            "i'd" -> "I'd"
+            "i'll" -> "I'll"
+            "i've" -> "I've"
+            else -> word
+        }
+    }
+
+    fun isWordChar(char: Char): Boolean {
+        return char.isLetter() || normalizeApostrophe(char) == '\''
+    }
+
     private fun normalizeSearch(rawPrefix: String): String {
-        return rawPrefix.trim().lowercase(Locale.US).filter { it.isLetter() || it == '\'' }
+        return normalizeApostrophes(rawPrefix).trim().lowercase(Locale.US).filter { it.isLetter() || it == '\'' }
+    }
+
+    private fun matchesPrefix(word: String, prefix: String, searchPrefix: String): Boolean {
+        if (prefix.isBlank()) return true
+        return word.startsWith(prefix) || searchKey(word).startsWith(searchPrefix)
+    }
+
+    private fun searchKey(word: String): String {
+        return word.filterNot { it == '\'' }
+    }
+
+    private fun normalizeApostrophes(value: String): String {
+        return value.map { normalizeApostrophe(it) }.joinToString(separator = "")
+    }
+
+    private fun normalizeApostrophe(char: Char): Char {
+        return when (char) {
+            '\u2018', '\u2019', '\u02bc', '\uff07', '`' -> '\''
+            else -> char
+        }
     }
 
     private fun readEntries(prefs: SharedPreferences): List<UserWordEntry> {
@@ -220,6 +282,14 @@ object LocalDictionary {
             }
             else -> word
         }
+    }
+
+    private fun formatSuggestion(rawPrefix: String, word: String): String {
+        val display = displayWord(word)
+        if (rawPrefix.isBlank()) return display
+        if (rawPrefix.all { !it.isLetter() || it.isUpperCase() }) return display.uppercase(Locale.US)
+        if (word.startsWith("i'")) return display
+        return applyPrefixCase(rawPrefix, display)
     }
 }
 

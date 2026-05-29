@@ -77,6 +77,7 @@ class RetuiKeyboardService : InputMethodService() {
     private val repeatHandler = Handler(Looper.getMainLooper())
     private var repeatRunnable: Runnable? = null
     private var suggestionStrip: LinearLayout? = null
+    private var pendingAddWord: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -242,6 +243,7 @@ class RetuiKeyboardService : InputMethodService() {
             when (chip.action) {
                 SuggestionAction.ADD_WORD -> {
                     LocalDictionary.learnTypedWord(prefs, chip.word, force = true)
+                    pendingAddWord = null
                     refreshSuggestionStripSoon()
                 }
                 SuggestionAction.COMMIT -> commitSuggestion(chip.word)
@@ -255,12 +257,16 @@ class RetuiKeyboardService : InputMethodService() {
         val out = mutableListOf<SuggestionChip>()
         val normalized = LocalDictionary.normalizeWord(currentWord)
 
-        if (
-            normalized != null &&
-            !LocalDictionary.hasUserWord(prefs, normalized) &&
-            !LocalDictionary.isBuiltInWord(normalized)
-        ) {
-            out.add(SuggestionChip("+ $currentWord", normalized, SuggestionAction.ADD_WORD, 1.15f))
+        if (normalized != null) {
+            pendingAddWord = null
+            if (!LocalDictionary.containsKnownWord(prefs, normalized)) {
+                out.add(SuggestionChip("+ ${currentWord.trim()}", normalized, SuggestionAction.ADD_WORD, 1.15f))
+            }
+        } else if (normalized.isNullOrBlank()) {
+            val pending = pendingAddWord
+            if (pending != null && !LocalDictionary.containsKnownWord(prefs, pending)) {
+                out.add(SuggestionChip("+ ${LocalDictionary.displayWord(pending)}", pending, SuggestionAction.ADD_WORD, 1.15f))
+            }
         }
 
         val remaining = (5 - out.size).coerceAtLeast(1)
@@ -980,6 +986,7 @@ class RetuiKeyboardService : InputMethodService() {
             ic.deleteSurroundingText(currentWord.length, 0)
         }
         ic.commitText("$word ", 1)
+        pendingAddWord = null
         LocalDictionary.recordAcceptedWord(prefs, word)
         if (shifted && !capsLocked) {
             shifted = false
@@ -1044,8 +1051,16 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun learnFinishedWord(word: String?) {
-        if (!layout.learnLocalWords || word.isNullOrBlank()) return
-        LocalDictionary.learnTypedWord(prefs, word, force = false)
+        if (word.isNullOrBlank()) return
+        val normalized = LocalDictionary.normalizeWord(word) ?: return
+        if (LocalDictionary.containsKnownWord(prefs, normalized)) {
+            pendingAddWord = null
+            if (layout.learnLocalWords) {
+                LocalDictionary.learnTypedWord(prefs, normalized, force = false)
+            }
+            return
+        }
+        pendingAddWord = normalized
     }
 
     private fun refreshSuggestionStripSoon() {
@@ -1073,7 +1088,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun isWordChar(char: Char): Boolean {
-        return char.isLetter() || char == '\''
+        return LocalDictionary.isWordChar(char)
     }
 
     private fun applyEditorInfo(info: EditorInfo?) {

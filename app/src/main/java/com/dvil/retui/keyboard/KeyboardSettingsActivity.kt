@@ -51,6 +51,7 @@ class KeyboardSettingsActivity : Activity() {
     private var topInsetPx = 0
     private var bottomInsetPx = 0
     private var imeInsetPx = 0
+    private var dictionaryEditorOpen = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -114,11 +115,11 @@ class KeyboardSettingsActivity : Activity() {
                 rebuildRows()
                 refreshKeyboard()
             }
-            REQUEST_DICTIONARY_BACKUP -> {
-                backupDictionary(uri)
+            REQUEST_PROFILE_BACKUP -> {
+                backupProfile(uri)
             }
-            REQUEST_DICTIONARY_RESTORE -> {
-                restoreDictionary(uri)
+            REQUEST_PROFILE_RESTORE -> {
+                restoreProfile(uri)
             }
         }
     }
@@ -586,32 +587,27 @@ class KeyboardSettingsActivity : Activity() {
         parent.addView(count, countParams)
 
         addDictionaryAddRow(parent)
-        addCommandButton(parent, getString(R.string.setting_dictionary_backup)) {
+        addCommandButton(parent, getString(R.string.setting_dictionary_edit)) {
+            dictionaryEditorOpen = true
+            rebuildRows()
+        }
+        if (dictionaryEditorOpen) {
+            addDictionaryEditor(parent)
+        }
+        addCommandButton(parent, getString(R.string.setting_profile_backup)) {
             val intent = Intent(Intent.ACTION_CREATE_DOCUMENT)
             intent.addCategory(Intent.CATEGORY_OPENABLE)
             intent.type = "application/json"
-            intent.putExtra(Intent.EXTRA_TITLE, "retui-keyboard-dictionary.json")
-            startActivityForResult(intent, REQUEST_DICTIONARY_BACKUP)
+            intent.putExtra(Intent.EXTRA_TITLE, "retui-keyboard-profile.json")
+            startActivityForResult(intent, REQUEST_PROFILE_BACKUP)
         }
-        addCommandButton(parent, getString(R.string.setting_dictionary_restore)) {
+        addCommandButton(parent, getString(R.string.setting_profile_restore)) {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
             intent.addCategory(Intent.CATEGORY_OPENABLE)
             intent.type = "application/json"
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            startActivityForResult(intent, REQUEST_DICTIONARY_RESTORE)
+            startActivityForResult(intent, REQUEST_PROFILE_RESTORE)
         }
-
-        if (words.isEmpty()) {
-            val empty = terminalLabel("NO LOCAL WORDS", max(10f, theme.moduleBodyTextSizeSp.toFloat() - 2f), bold = true)
-            empty.setTextColor(theme.dim)
-            empty.gravity = Gravity.CENTER
-            val emptyParams = LinearLayout.LayoutParams(-1, dp(38))
-            emptyParams.setMargins(0, dp(5), 0, dp(5))
-            parent.addView(empty, emptyParams)
-            return
-        }
-
-        words.forEach { addDictionaryWordRow(parent, it) }
     }
 
     private fun addDictionaryAddRow(parent: LinearLayout) {
@@ -694,6 +690,42 @@ class KeyboardSettingsActivity : Activity() {
             toast("WORD REMOVED")
             rebuildRows()
             refreshKeyboard()
+        }
+    }
+
+    private fun addDictionaryEditor(parent: LinearLayout) {
+        val editor = terminalDictionaryEditor()
+        editor.setText(LocalDictionary.editableText(prefs))
+        val editorParams = LinearLayout.LayoutParams(-1, dp(178))
+        editorParams.setMargins(0, 0, 0, dp(7))
+        parent.addView(editor, editorParams)
+
+        val actions = LinearLayout(this)
+        actions.orientation = LinearLayout.HORIZONTAL
+        actions.gravity = Gravity.CENTER_VERTICAL
+        val actionsParams = LinearLayout.LayoutParams(-1, dp(44))
+        actionsParams.setMargins(0, 0, 0, dp(7))
+        parent.addView(actions, actionsParams)
+
+        val save = terminalEditorButton("SAVE")
+        val close = terminalEditorButton("CLOSE")
+        val saveParams = LinearLayout.LayoutParams(0, -1, 1f)
+        saveParams.rightMargin = dp(4)
+        val closeParams = LinearLayout.LayoutParams(0, -1, 1f)
+        closeParams.leftMargin = dp(4)
+        actions.addView(save, saveParams)
+        actions.addView(close, closeParams)
+
+        save.setOnClickListener {
+            val result = LocalDictionary.replaceUserWords(prefs, editor.text.toString())
+            dictionaryEditorOpen = false
+            toast("SAVED ${result.wordCount} WORDS")
+            rebuildRows()
+            refreshKeyboard()
+        }
+        close.setOnClickListener {
+            dictionaryEditorOpen = false
+            rebuildRows()
         }
     }
 
@@ -865,6 +897,45 @@ class KeyboardSettingsActivity : Activity() {
         return input
     }
 
+    private fun terminalDictionaryEditor(): EditText {
+        val input = EditText(this)
+        input.typeface = Typeface.MONOSPACE
+        input.setSingleLine(false)
+        input.minLines = 6
+        input.gravity = Gravity.TOP or Gravity.START
+        input.inputType = InputType.TYPE_CLASS_TEXT or
+            InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+            InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        input.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN
+        input.setTextColor(theme.text)
+        input.setHintTextColor(withAlpha(theme.dim, 150))
+        input.textSize = max(10f, theme.moduleBodyTextSizeSp.toFloat() - 1f)
+        input.setPadding(dp(10), dp(8), dp(10), dp(8))
+        input.background = panelDrawable(
+            fill = theme.inputBg,
+            stroke = withAlpha(theme.inputBorder, 160),
+            strokeDp = 1f,
+            radiusDp = theme.moduleCornerRadiusDp,
+            notch = false
+        )
+        return input
+    }
+
+    private fun terminalEditorButton(text: String): TextView {
+        val button = terminalLabel(text, max(10f, theme.moduleBodyTextSizeSp.toFloat() - 2f), bold = true)
+        button.gravity = Gravity.CENTER
+        button.isClickable = true
+        button.isFocusable = true
+        button.background = panelDrawable(
+            fill = theme.actionBg,
+            stroke = theme.border,
+            strokeDp = 1f,
+            radiusDp = theme.moduleCornerRadiusDp,
+            notch = false
+        )
+        return button
+    }
+
     private fun terminalMicroButton(text: String): TextView {
         val button = terminalLabel(text, 18f, bold = true)
         button.gravity = Gravity.CENTER
@@ -889,7 +960,7 @@ class KeyboardSettingsActivity : Activity() {
         return chip
     }
 
-    private fun backupDictionary(uri: Uri) {
+    private fun backupProfile(uri: Uri) {
         val written = try {
             val stream = contentResolver.openOutputStream(uri)
             if (stream == null) {
@@ -897,7 +968,7 @@ class KeyboardSettingsActivity : Activity() {
             } else {
                 stream.use {
                     OutputStreamWriter(it, Charsets.UTF_8).use { writer ->
-                        writer.write(LocalDictionary.exportJson(prefs))
+                        writer.write(KeyboardProfileBackup.exportJson(prefs))
                     }
                 }
                 true
@@ -905,16 +976,16 @@ class KeyboardSettingsActivity : Activity() {
         } catch (_: Exception) {
             false
         }
-        toast(if (written) "DICTIONARY BACKED UP" else "BACKUP FAILED")
+        toast(if (written) "PROFILE BACKED UP" else "BACKUP FAILED")
     }
 
-    private fun restoreDictionary(uri: Uri) {
+    private fun restoreProfile(uri: Uri) {
         val result = try {
             val raw = contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
             if (raw.isNullOrBlank()) {
                 null
             } else {
-                LocalDictionary.importJson(prefs, raw)
+                KeyboardProfileBackup.importJson(prefs, raw)
             }
         } catch (_: Exception) {
             null
@@ -923,7 +994,9 @@ class KeyboardSettingsActivity : Activity() {
             toast("RESTORE FAILED")
             return
         }
-        toast("RESTORED ${result.wordCount} WORDS")
+        dictionaryEditorOpen = false
+        theme = loadSettingsTheme(null)
+        toast("RESTORED ${result.wordCount} WORDS / ${result.preferenceCount} SETTINGS")
         rebuildRows()
         refreshKeyboard()
     }
@@ -1849,8 +1922,8 @@ class KeyboardSettingsActivity : Activity() {
 
     companion object {
         private const val REQUEST_BACKGROUND = 41
-        private const val REQUEST_DICTIONARY_BACKUP = 42
-        private const val REQUEST_DICTIONARY_RESTORE = 43
+        private const val REQUEST_PROFILE_BACKUP = 42
+        private const val REQUEST_PROFILE_RESTORE = 43
         private const val BAR_SEGMENTS = 16
 
         private val SURFACE_BG = Color.rgb(2, 6, 4)
