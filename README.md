@@ -1,4 +1,4 @@
-# Re_TUI_Keys
+# Re-TUI-Keys
 
 Re:TUI Keyboard is a local-first Android IME built to match the Re:TUI launcher
 visual language while still behaving like a normal keyboard.
