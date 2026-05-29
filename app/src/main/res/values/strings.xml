@@ -1,0 +1,36 @@
+<resources>
+    <string name="app_name">Re:TUI Keyboard</string>
+    <string name="ime_name">Re:TUI Keyboard</string>
+    <string name="settings_title">Re:TUI Keyboard</string>
+    <string name="setting_bottom_margin">Bottom margin</string>
+    <string name="setting_horizontal_margins">Left/right margins</string>
+    <string name="setting_keyboard_height">Height</string>
+    <string name="setting_key_gap">Key gap</string>
+    <string name="setting_corner_radius">Rounded edges</string>
+    <string name="setting_stroke_width">Stroke</string>
+    <string name="setting_background_opacity">Image opacity</string>
+    <string name="setting_show_number_row">Show number row</string>
+    <string name="setting_show_number_row_summary">Adds a dedicated digit row above QWERTY.</string>
+    <string name="setting_show_arrow_row">Show arrow keys</string>
+    <string name="setting_show_arrow_row_summary">Adds a cursor row for terminal movement.</string>
+    <string name="setting_quick_period">Quick period key</string>
+    <string name="setting_quick_period_summary">Keeps a period key beside space.</string>
+    <string name="setting_vibrate_on_keypress">Vibrate on keypress</string>
+    <string name="setting_vibrate_on_keypress_summary">Uses Android keyboard tap haptics.</string>
+    <string name="setting_sound_on_keypress">Sound on keypress</string>
+    <string name="setting_sound_on_keypress_summary">Plays the system key click sound.</string>
+    <string name="setting_local_suggestions">Local suggestions</string>
+    <string name="setting_local_suggestions_summary">Shows offline word suggestions from this device only.</string>
+    <string name="setting_learn_local_words">Learn local words</string>
+    <string name="setting_learn_local_words_summary">Adds custom typed words to this keyboard dictionary.</string>
+    <string name="setting_dictionary_add_hint">word</string>
+    <string name="setting_dictionary_backup">Backup dictionary</string>
+    <string name="setting_dictionary_restore">Restore dictionary</string>
+    <string name="setting_no_background">No background image</string>
+    <string name="setting_background_selected">Background image selected</string>
+    <string name="setting_pick_background">Pick background image</string>
+    <string name="setting_clear_background">Clear background image</string>
+    <string name="setting_input_methods">Input method settings</string>
+    <string name="setting_preview_hint">$ preview</string>
+    <string name="setting_reset_layout">Reset layout</string>
+</resources>
