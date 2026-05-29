@@ -232,24 +232,21 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun suggestionChipView(chip: SuggestionChip): TextView {
         val view = keyLabel(chip.label, Gravity.CENTER, keyTextSize(chip.label))
-        view.setTextColor(if (chip.action == SuggestionAction.STATUS) theme.headerText else theme.keyText)
+        view.setTextColor(theme.keyText)
         view.background = panel(
             if (chip.action == SuggestionAction.ADD_WORD) brightenColor(theme.keyBg, 1.12f, 28) else theme.keyBg,
             theme.border,
             5
         )
-        if (chip.action != SuggestionAction.STATUS) {
-            bindImmediateKey(view, action = {
-                when (chip.action) {
-                    SuggestionAction.ADD_WORD -> {
-                        LocalDictionary.learnTypedWord(prefs, chip.word, force = true)
-                        refreshSuggestionStripSoon()
-                    }
-                    SuggestionAction.COMMIT -> commitSuggestion(chip.word)
-                    SuggestionAction.STATUS -> Unit
+        bindImmediateKey(view, action = {
+            when (chip.action) {
+                SuggestionAction.ADD_WORD -> {
+                    LocalDictionary.learnTypedWord(prefs, chip.word, force = true)
+                    refreshSuggestionStripSoon()
                 }
-            })
-        }
+                SuggestionAction.COMMIT -> commitSuggestion(chip.word)
+            }
+        })
         return view
     }
 
@@ -271,11 +268,7 @@ class RetuiKeyboardService : InputMethodService() {
             out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
         }
 
-        if (out.isNotEmpty()) return out
-        return listOf(
-            SuggestionChip(modeLabel, modeLabel, SuggestionAction.STATUS, 1f),
-            SuggestionChip(contextLabel, contextLabel, SuggestionAction.STATUS, 1.4f)
-        )
+        return out
     }
 
     private fun controlRail(): LinearLayout {
@@ -1438,8 +1431,7 @@ class RetuiKeyboardService : InputMethodService() {
 
     private enum class SuggestionAction {
         ADD_WORD,
-        COMMIT,
-        STATUS
+        COMMIT
     }
 
     private enum class Special {
