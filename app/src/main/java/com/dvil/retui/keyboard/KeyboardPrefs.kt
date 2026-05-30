@@ -19,6 +19,7 @@ object KeyboardPrefs {
     const val KEY_SHOW_ARROW_ROW = "layout.showArrowRow"
     const val KEY_SHOW_NUMBER_ROW = "layout.showNumberRow"
     const val KEY_SOUND_ON_KEYPRESS = "layout.soundOnKeypress"
+    const val KEY_SPLIT_KEYBOARD = "layout.splitKeyboard"
     const val KEY_STROKE_WIDTH_DP = "layout.strokeWidthDp"
     const val KEY_THEME_COLORS_OVERRIDDEN = "theme.colorsOverridden"
     const val KEY_THEME_LAUNCHER_AVAILABLE = "theme.launcher.available"
@@ -38,6 +39,7 @@ object KeyboardPrefs {
     const val DEFAULT_SHOW_ARROW_ROW = false
     const val DEFAULT_SHOW_NUMBER_ROW = false
     const val DEFAULT_SOUND_ON_KEYPRESS = false
+    const val DEFAULT_SPLIT_KEYBOARD = false
     const val DEFAULT_STROKE_WIDTH_DP = 1
     const val DEFAULT_VIBRATE_ON_KEYPRESS = false
 
@@ -60,6 +62,7 @@ object KeyboardPrefs {
             showArrowRow = prefs.getBoolean(KEY_SHOW_ARROW_ROW, DEFAULT_SHOW_ARROW_ROW),
             showNumberRow = prefs.getBoolean(KEY_SHOW_NUMBER_ROW, DEFAULT_SHOW_NUMBER_ROW),
             soundOnKeypress = prefs.getBoolean(KEY_SOUND_ON_KEYPRESS, DEFAULT_SOUND_ON_KEYPRESS),
+            splitKeyboard = prefs.getBoolean(KEY_SPLIT_KEYBOARD, DEFAULT_SPLIT_KEYBOARD),
             strokeWidthDp = prefs.getInt(KEY_STROKE_WIDTH_DP, DEFAULT_STROKE_WIDTH_DP).coerceIn(0, 5),
             vibrateOnKeypress = prefs.getBoolean(KEY_VIBRATE_ON_KEYPRESS, DEFAULT_VIBRATE_ON_KEYPRESS)
         )
@@ -81,6 +84,7 @@ object KeyboardPrefs {
             .putBoolean(KEY_SHOW_ARROW_ROW, DEFAULT_SHOW_ARROW_ROW)
             .putBoolean(KEY_SHOW_NUMBER_ROW, DEFAULT_SHOW_NUMBER_ROW)
             .putBoolean(KEY_SOUND_ON_KEYPRESS, DEFAULT_SOUND_ON_KEYPRESS)
+            .putBoolean(KEY_SPLIT_KEYBOARD, DEFAULT_SPLIT_KEYBOARD)
             .putInt(KEY_STROKE_WIDTH_DP, DEFAULT_STROKE_WIDTH_DP)
             .putBoolean(KEY_VIBRATE_ON_KEYPRESS, DEFAULT_VIBRATE_ON_KEYPRESS)
     }
@@ -106,9 +110,10 @@ object KeyboardPrefs {
             !prefs.getBoolean(KEY_THEME_LAUNCHER_AVAILABLE, false) &&
             THEME_SNAPSHOT_SUFFIXES.any { prefs.contains("theme.$it") }
         ) {
+            val currentValues = prefs.all
             THEME_SNAPSHOT_SUFFIXES.forEach { suffix ->
                 val oldKey = "theme.$suffix"
-                val value = prefs.all[oldKey] ?: return@forEach
+                val value = currentValues[oldKey] ?: return@forEach
                 val newKey = KEY_THEME_LAUNCHER_PREFIX + suffix
                 when (value) {
                     is Boolean -> editor.putBoolean(newKey, value)
@@ -136,6 +141,8 @@ object KeyboardPrefs {
         "headerText",
         "keyBg",
         "keyText",
+        "specialKeyBg",
+        "specialKeyText",
         "outputBg",
         "outputBorder",
         "fontSizeSp",
@@ -167,6 +174,7 @@ data class KeyboardLayoutSettings(
     val showArrowRow: Boolean,
     val showNumberRow: Boolean,
     val soundOnKeypress: Boolean,
+    val splitKeyboard: Boolean,
     val strokeWidthDp: Int,
     val vibrateOnKeypress: Boolean
 )

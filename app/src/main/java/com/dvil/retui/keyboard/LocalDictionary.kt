@@ -17,6 +17,7 @@ object LocalDictionary {
     private const val LATINIME_WORDLIST_GZIP_ASSET = "latinime/en_US_wordlist.combined.gz"
     private const val LATINIME_WORDLIST_PLAIN_ASSET = "latinime/en_US_wordlist.combined"
     private const val MAX_LATINIME_WORDS = 50_000
+    private const val PREFIX_INDEX_DEPTH = 3
 
     private val builtInWords = listOf(
         "i", "the", "and", "you", "that", "have", "for", "not", "with", "this", "but", "from",
@@ -51,9 +52,12 @@ object LocalDictionary {
     private val fallbackStaticEntries = builtInWords.map { word ->
         StaticWordEntry(word, builtInWeight[word] ?: 8_000)
     }
-    @Volatile private var latinImeStaticEntries: List<StaticWordEntry>? = null
+    private val fallbackStaticIndex by lazy { buildStaticIndex(fallbackStaticEntries) }
+    @Volatile private var latinImeLoaded = false
     @Volatile private var latinImeStaticSet: Set<String>? = null
-    @Volatile private var latinImeStaticWeight: Map<String, Int>? = null
+    @Volatile private var latinImeStaticIndex: StaticIndex? = null
+    @Volatile private var cachedUserWordsRaw: String? = null
+    @Volatile private var cachedUserWords: List<UserWordEntry> = emptyList()
 
     private val contractionShortcuts = mapOf(
         "im" to "i'm",
@@ -103,15 +107,15 @@ object LocalDictionary {
         .mapValues { entry -> entry.value.mapNotNull { normalizeWord(it) } }
 
     fun preload(context: Context) {
-        if (latinImeStaticEntries != null) return
+        if (latinImeLoaded) return
         synchronized(this) {
-            if (latinImeStaticEntries != null) return
+            if (latinImeLoaded) return
             val entries = loadLatinImeEntries(context)
             if (entries.isNotEmpty()) {
-                latinImeStaticEntries = entries
                 latinImeStaticSet = entries.mapTo(HashSet(entries.size)) { it.word }
-                latinImeStaticWeight = entries.associate { it.word to it.weight }
+                latinImeStaticIndex = buildStaticIndex(entries)
             }
+            latinImeLoaded = true
         }
     }
 
@@ -135,9 +139,9 @@ object LocalDictionary {
         val shortcut = if (prefix.contains('\'')) null else contractionShortcuts[searchPrefix]
         shortcut?.let { offer(it, 220_000) }
 
-        staticEntries().forEach { entry ->
+        staticPrefixCandidates(searchPrefix).forEach { entry ->
             val word = entry.word
-            if (matchesPrefix(word, prefix, searchPrefix)) {
+            if (matchesPrefix(entry, prefix, searchPrefix)) {
                 val score = builtInPrefixScore(entry, prefix, searchPrefix)
                 offer(word, score)
             }
@@ -375,11 +379,16 @@ object LocalDictionary {
         return word.startsWith(prefix) || searchKey(word).startsWith(searchPrefix)
     }
 
+    private fun matchesPrefix(entry: StaticWordEntry, prefix: String, searchPrefix: String): Boolean {
+        if (prefix.isBlank()) return true
+        return entry.word.startsWith(prefix) || entry.searchKey.startsWith(searchPrefix)
+    }
+
     private fun builtInPrefixScore(entry: StaticWordEntry, prefix: String, searchPrefix: String): Int {
         val word = entry.word
         val base = entry.weight
         val matchBoost = if (word.startsWith(prefix)) 28_000 else 18_000
-        val lengthPenalty = ((searchKey(word).length - searchPrefix.length).coerceAtLeast(0) * 700).coerceAtMost(12_000)
+        val lengthPenalty = ((entry.searchKey.length - searchPrefix.length).coerceAtLeast(0) * 700).coerceAtMost(12_000)
         val shortPrefixBoost = if (searchPrefix.length < 3) 35_000 else 0
         return base + matchBoost + shortPrefixBoost - lengthPenalty
     }
@@ -392,16 +401,24 @@ object LocalDictionary {
         return base + matchBoost + frequencyBoost - lengthPenalty
     }
 
-    private fun staticEntries(): List<StaticWordEntry> {
-        return latinImeStaticEntries ?: fallbackStaticEntries
-    }
-
-    private fun staticWeight(word: String): Int {
-        return latinImeStaticWeight?.get(word) ?: builtInWeight[word] ?: 8_000
-    }
-
     private fun isStaticWord(word: String): Boolean {
         return latinImeStaticSet?.contains(word) == true || builtInSet.contains(word)
+    }
+
+    private fun staticIndex(): StaticIndex {
+        return latinImeStaticIndex ?: fallbackStaticIndex
+    }
+
+    private fun staticPrefixCandidates(searchPrefix: String): List<StaticWordEntry> {
+        val key = searchPrefix.take(PREFIX_INDEX_DEPTH)
+        return staticIndex().prefixBuckets[key].orEmpty()
+    }
+
+    private fun staticTypoCandidates(searchPrefix: String, maxDistance: Int): Sequence<StaticWordEntry> {
+        val buckets = staticIndex().lengthBuckets
+        return ((searchPrefix.length - maxDistance)..(searchPrefix.length + maxDistance))
+            .asSequence()
+            .flatMap { length -> buckets[length].orEmpty().asSequence() }
     }
 
     private fun addTypoCandidates(
@@ -410,14 +427,13 @@ object LocalDictionary {
         offer: (String, Int) -> Unit
     ) {
         val maxDistance = if (searchPrefix.length >= 6) 2 else 1
-        staticEntries().forEach { entry ->
+        staticTypoCandidates(searchPrefix, maxDistance).forEach { entry ->
             val word = entry.word
-            val compact = searchKey(word)
+            val compact = entry.searchKey
             if (kotlin.math.abs(compact.length - searchPrefix.length) <= maxDistance) {
                 val distance = editDistanceAtMost(searchPrefix, compact, maxDistance)
                 if (distance in 0..maxDistance) {
-                    val weight = staticWeight(word)
-                    offer(word, 42_000 + (weight / 10) - (distance * 12_000))
+                    offer(word, 42_000 + (entry.weight / 10) - (distance * 12_000))
                 }
             }
         }
@@ -462,6 +478,25 @@ object LocalDictionary {
         return word.filterNot { it == '\'' }
     }
 
+    private fun buildStaticIndex(entries: List<StaticWordEntry>): StaticIndex {
+        val prefixBuckets = HashMap<String, MutableList<StaticWordEntry>>()
+        val lengthBuckets = HashMap<Int, MutableList<StaticWordEntry>>()
+        entries.forEach { entry ->
+            val key = entry.searchKey
+            if (key.isNotBlank()) {
+                val maxDepth = minOf(PREFIX_INDEX_DEPTH, key.length)
+                for (length in 1..maxDepth) {
+                    prefixBuckets.getOrPut(key.substring(0, length)) { mutableListOf() }.add(entry)
+                }
+                lengthBuckets.getOrPut(key.length) { mutableListOf() }.add(entry)
+            }
+        }
+        return StaticIndex(
+            prefixBuckets = prefixBuckets.mapValues { it.value.toList() },
+            lengthBuckets = lengthBuckets.mapValues { it.value.toList() }
+        )
+    }
+
     private fun normalizeApostrophes(value: String): String {
         return value.map { normalizeApostrophe(it) }.joinToString(separator = "")
     }
@@ -474,12 +509,19 @@ object LocalDictionary {
     }
 
     private fun readEntries(prefs: SharedPreferences): List<UserWordEntry> {
-        val raw = prefs.getString(KEY_WORDS_JSON, null) ?: return emptyList()
-        return try {
+        val raw = prefs.getString(KEY_WORDS_JSON, null)
+        if (raw != null && raw == cachedUserWordsRaw) return cachedUserWords
+        if (raw == null) {
+            cacheUserWords(null, emptyList())
+            return emptyList()
+        }
+        val parsed = try {
             parseStoredArray(JSONArray(raw))
         } catch (_: Exception) {
             emptyList()
         }
+        cacheUserWords(raw, parsed)
+        return parsed
     }
 
     private fun writeEntries(prefs: SharedPreferences, entries: Collection<UserWordEntry>) {
@@ -500,7 +542,14 @@ object LocalDictionary {
                     .put("lastUsedAt", entry.lastUsedAt.coerceAtLeast(0L))
             )
         }
-        prefs.edit().putString(KEY_WORDS_JSON, array.toString()).apply()
+        val raw = array.toString()
+        cacheUserWords(raw, bounded)
+        prefs.edit().putString(KEY_WORDS_JSON, raw).apply()
+    }
+
+    private fun cacheUserWords(raw: String?, entries: List<UserWordEntry>) {
+        cachedUserWordsRaw = raw
+        cachedUserWords = entries
     }
 
     private fun parseBackup(rawJson: String): List<UserWordEntry> {
@@ -570,7 +619,13 @@ private data class RankedCandidate(
 
 private data class StaticWordEntry(
     val word: String,
-    val weight: Int
+    val weight: Int,
+    val searchKey: String = word.filterNot { it == '\'' }
+)
+
+private data class StaticIndex(
+    val prefixBuckets: Map<String, List<StaticWordEntry>>,
+    val lengthBuckets: Map<Int, List<StaticWordEntry>>
 )
 
 data class ImportResult(

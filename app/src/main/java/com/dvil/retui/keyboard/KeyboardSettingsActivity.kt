@@ -21,6 +21,8 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
@@ -54,6 +56,9 @@ class KeyboardSettingsActivity : Activity() {
     private var bottomInsetPx = 0
     private var imeInsetPx = 0
     private var dictionaryEditorOpen = false
+    private val previewHandler = Handler(Looper.getMainLooper())
+    private var previewFocusRunnable: Runnable? = null
+    private var previewThemeRunnable: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,6 +73,7 @@ class KeyboardSettingsActivity : Activity() {
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
+        cancelPreviewCallbacks()
         setIntent(intent)
         theme = loadSettingsTheme(intent)
         themeDraft = theme
@@ -100,6 +106,16 @@ class KeyboardSettingsActivity : Activity() {
     override fun onResume() {
         super.onResume()
         showPreviewKeyboard()
+    }
+
+    override fun onPause() {
+        cancelPreviewCallbacks()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        cancelPreviewCallbacks()
+        super.onDestroy()
     }
 
     @Deprecated("Deprecated in platform API")
@@ -253,6 +269,13 @@ class KeyboardSettingsActivity : Activity() {
             summary = getString(R.string.setting_show_arrow_row_summary),
             key = KeyboardPrefs.KEY_SHOW_ARROW_ROW,
             defaultValue = KeyboardPrefs.DEFAULT_SHOW_ARROW_ROW
+        )
+        addTerminalToggle(
+            parent = list,
+            label = getString(R.string.setting_split_keyboard),
+            summary = getString(R.string.setting_split_keyboard_summary),
+            key = KeyboardPrefs.KEY_SPLIT_KEYBOARD,
+            defaultValue = KeyboardPrefs.DEFAULT_SPLIT_KEYBOARD
         )
         addTerminalToggle(
             parent = list,
@@ -1257,13 +1280,26 @@ class KeyboardSettingsActivity : Activity() {
 
     private fun showPreviewKeyboard(delayMs: Long = 250L) {
         if (!::previewInput.isInitialized) return
-        previewInput.postDelayed({
+        cancelPreviewCallbacks()
+        previewFocusRunnable = Runnable {
+            if (isFinishing || !::previewInput.isInitialized) return@Runnable
             previewInput.requestFocus()
             sendPreviewTheme()
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.showSoftInput(previewInput, InputMethodManager.SHOW_FORCED)
-            previewInput.postDelayed({ sendPreviewTheme() }, 160L)
-        }, delayMs)
+            imm.showSoftInput(previewInput, InputMethodManager.SHOW_IMPLICIT)
+            previewThemeRunnable = Runnable {
+                if (!isFinishing) sendPreviewTheme()
+            }
+            previewHandler.postDelayed(previewThemeRunnable!!, 160L)
+        }
+        previewHandler.postDelayed(previewFocusRunnable!!, delayMs)
+    }
+
+    private fun cancelPreviewCallbacks() {
+        previewFocusRunnable?.let { previewHandler.removeCallbacks(it) }
+        previewThemeRunnable?.let { previewHandler.removeCallbacks(it) }
+        previewFocusRunnable = null
+        previewThemeRunnable = null
     }
 
     private fun sendPreviewTheme() {
@@ -1278,6 +1314,8 @@ class KeyboardSettingsActivity : Activity() {
             putInt("module_text_color", theme.headerText)
             putInt("module_button_background_color", theme.inputBg)
             putInt("module_button_text_color", theme.inputText)
+            putInt("keyboard_special_key_bg", theme.specialKeyBg)
+            putInt("keyboard_special_key_text", theme.specialKeyText)
             putInt("output_background_color", theme.outputBg)
             putInt("output_border_color", theme.outputBorder)
             putBoolean("enable_dashed_border", theme.dashedBorders)
@@ -1561,6 +1599,21 @@ class KeyboardSettingsActivity : Activity() {
                 "input_text_color",
                 "input_text"
             ),
+            specialKeyBg = readColor(
+                bundle,
+                base.specialKeyBg,
+                "keyboard_special_key_bg",
+                "keyboard_special_key_background",
+                "special_key_bg_color",
+                "special_key_background_color"
+            ),
+            specialKeyText = readColor(
+                bundle,
+                base.specialKeyText,
+                "keyboard_special_key_text",
+                "keyboard_special_key_text_color",
+                "special_key_text_color"
+            ),
             outputBg = readColor(bundle, base.outputBg, "output_bg_color", "output_background_color", "output_bg"),
             outputBorder = readColor(bundle, base.outputBorder, "output_border_color", "output_border", "terminal_border_color"),
             dashedBorders = readBoolean(
@@ -1655,10 +1708,14 @@ class KeyboardSettingsActivity : Activity() {
         val outputBorder = if (base.outputBorder != 0) base.outputBorder else base.border
         val inputBg = if (base.inputBg != 0) base.inputBg else blendColor(base.panelBg, Color.BLACK, 0.16f)
         val inputText = if (base.inputText != 0) base.inputText else base.text
+        val specialKeyBg = if (base.specialKeyBg != 0) base.specialKeyBg else base.border
+        val specialKeyText = if (base.specialKeyText != 0) base.specialKeyText else Color.WHITE
         return base.copy(
             outputBg = outputBg,
             outputBorder = outputBorder,
             inputBg = inputBg,
+            specialKeyBg = specialKeyBg,
+            specialKeyText = specialKeyText,
             inputBorder = outputBorder,
             rowBg = blendColor(outputBg, Color.BLACK, 0.08f),
             actionBg = blendColor(inputBg, Color.WHITE, 0.06f),
@@ -1686,6 +1743,8 @@ class KeyboardSettingsActivity : Activity() {
             headerText = prefs.getInt(prefix + "headerText", fallback.headerText),
             inputBg = prefs.getInt(prefix + "keyBg", fallback.inputBg),
             inputText = prefs.getInt(prefix + "keyText", fallback.inputText),
+            specialKeyBg = prefs.getInt(prefix + "specialKeyBg", fallback.specialKeyBg),
+            specialKeyText = prefs.getInt(prefix + "specialKeyText", fallback.specialKeyText),
             outputBg = prefs.getInt(prefix + "outputBg", fallback.outputBg),
             outputBorder = prefs.getInt(prefix + "outputBorder", fallback.outputBorder),
             dashedBorders = prefs.getBoolean(prefix + "dashedBorders", fallback.dashedBorders),
@@ -1721,6 +1780,8 @@ class KeyboardSettingsActivity : Activity() {
             .putInt(prefix + "headerText", next.headerText)
             .putInt(prefix + "keyBg", next.inputBg)
             .putInt(prefix + "keyText", next.inputText)
+            .putInt(prefix + "specialKeyBg", next.specialKeyBg)
+            .putInt(prefix + "specialKeyText", next.specialKeyText)
             .putInt(prefix + "outputBg", next.outputBg)
             .putInt(prefix + "outputBorder", next.outputBorder)
             .putBoolean(prefix + "dashedBorders", next.dashedBorders)
@@ -1875,6 +1936,18 @@ class KeyboardSettingsActivity : Activity() {
                 set = { state, color -> state.copy(inputText = color) }
             ),
             ColorBinding(
+                label = "Special key background",
+                summary = "keyboard_special_key_bg; defaults to shared border",
+                get = { it.specialKeyBg },
+                set = { state, color -> state.copy(specialKeyBg = color) }
+            ),
+            ColorBinding(
+                label = "Special key text",
+                summary = "keyboard_special_key_text; defaults to white",
+                get = { it.specialKeyText },
+                set = { state, color -> state.copy(specialKeyText = color) }
+            ),
+            ColorBinding(
                 label = "Output background",
                 summary = "theme.xml: output_background_color",
                 get = { it.outputBg },
@@ -1929,6 +2002,8 @@ class KeyboardSettingsActivity : Activity() {
         val headerText: Int = Color.rgb(187, 225, 136),
         val inputBg: Int = Color.rgb(3, 12, 8),
         val inputText: Int = Color.rgb(113, 255, 171),
+        val specialKeyBg: Int = 0,
+        val specialKeyText: Int = Color.WHITE,
         val inputBorder: Int = Color.rgb(142, 184, 83),
         val outputBg: Int = 0,
         val outputBorder: Int = 0,

@@ -24,6 +24,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -62,11 +63,15 @@ class RetuiKeyboardService : InputMethodService() {
         showArrowRow = KeyboardPrefs.DEFAULT_SHOW_ARROW_ROW,
         showNumberRow = KeyboardPrefs.DEFAULT_SHOW_NUMBER_ROW,
         soundOnKeypress = KeyboardPrefs.DEFAULT_SOUND_ON_KEYPRESS,
+        splitKeyboard = KeyboardPrefs.DEFAULT_SPLIT_KEYBOARD,
         strokeWidthDp = KeyboardPrefs.DEFAULT_STROKE_WIDTH_DP,
         vibrateOnKeypress = KeyboardPrefs.DEFAULT_VIBRATE_ON_KEYPRESS
     )
     private var shifted = false
     private var capsLocked = false
+    private var ctrlLatched = false
+    private var altLatched = false
+    private var metaLatched = false
     private var lastShiftTapAtMs = 0L
     private var symbols = false
     private var currentInfo: EditorInfo? = null
@@ -76,6 +81,11 @@ class RetuiKeyboardService : InputMethodService() {
     private var cachedBackgroundUri: String? = null
     private val repeatHandler = Handler(Looper.getMainLooper())
     private var repeatRunnable: Runnable? = null
+    private var suggestionRefreshPosted = false
+    private val suggestionRefreshRunnable = Runnable {
+        suggestionRefreshPosted = false
+        refreshSuggestionStrip()
+    }
     private var suggestionStrip: LinearLayout? = null
     private var pendingAddWord: String? = null
 
@@ -111,6 +121,7 @@ class RetuiKeyboardService : InputMethodService() {
 
     override fun onFinishInputView(finishingInput: Boolean) {
         stopRepeat()
+        cancelSuggestionRefresh()
         suggestionStrip = null
         resetTransientLayoutState()
         super.onFinishInputView(finishingInput)
@@ -118,6 +129,7 @@ class RetuiKeyboardService : InputMethodService() {
 
     override fun onFinishInput() {
         stopRepeat()
+        cancelSuggestionRefresh()
         suggestionStrip = null
         resetTransientLayoutState()
         super.onFinishInput()
@@ -125,6 +137,10 @@ class RetuiKeyboardService : InputMethodService() {
 
     override fun onDestroy() {
         stopRepeat()
+        cancelSuggestionRefresh()
+        cachedBackgroundBitmap?.recycle()
+        cachedBackgroundBitmap = null
+        cachedBackgroundUri = null
         super.onDestroy()
     }
 
@@ -152,19 +168,24 @@ class RetuiKeyboardService : InputMethodService() {
         when (action) {
             ACTION_APPLY_CONTEXT -> {
                 if (data != null) {
-                    applyContextBundle(data, ThemeSource.LAUNCHER)
-                    setInputView(buildKeyboardView())
+                    if (applyContextBundle(data, ThemeSource.LAUNCHER)) {
+                        setInputView(buildKeyboardView())
+                    }
                 }
             }
             ACTION_APPLY_THEME -> {
                 if (data != null) {
-                    applyContextBundle(data, ThemeSource.PREVIEW)
-                    setInputView(buildKeyboardView())
+                    if (applyContextBundle(data, ThemeSource.PREVIEW)) {
+                        setInputView(buildKeyboardView())
+                    }
                 }
             }
             ACTION_REFRESH_SETTINGS -> {
-                loadPersistedTheme()
-                setInputView(buildKeyboardView())
+                val themeChanged = loadPersistedTheme()
+                val nextLayout = KeyboardPrefs.readLayout(prefs)
+                if (themeChanged || nextLayout != layout) {
+                    setInputView(buildKeyboardView())
+                }
             }
         }
     }
@@ -205,6 +226,8 @@ class RetuiKeyboardService : InputMethodService() {
         val main = keyboardBody()
         if (usesNumberPad()) {
             addNumberPadRows(main, landscape = true)
+        } else if (layout.splitKeyboard) {
+            addSplitTextRows(main)
         } else {
             addTextRows(main, landscape = true)
         }
@@ -231,19 +254,33 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun populateSuggestionStrip(strip: LinearLayout) {
-        strip.removeAllViews()
         val chips = suggestionChips()
         val gap = dp(layout.keyGapDp + 1)
-        chips.forEach { chip ->
-            val view = suggestionChipView(chip)
-            val params = LinearLayout.LayoutParams(0, -1, chip.weight)
+        chips.forEachIndexed { index, chip ->
+            val view = (strip.getChildAt(index) as? TextView) ?: suggestionChipView().also {
+                strip.addView(it)
+            }
+            configureSuggestionChipView(view, chip)
+            val params = (view.layoutParams as? LinearLayout.LayoutParams) ?: LinearLayout.LayoutParams(0, -1)
+            params.width = 0
+            params.height = -1
+            params.weight = chip.weight
             params.setMargins(gap, 0, gap, 0)
-            strip.addView(view, params)
+            view.layoutParams = params
+        }
+        while (strip.childCount > chips.size) {
+            strip.removeViewAt(strip.childCount - 1)
         }
     }
 
-    private fun suggestionChipView(chip: SuggestionChip): TextView {
-        val view = keyLabel(chip.label, Gravity.CENTER, keyTextSize(chip.label))
+    private fun suggestionChipView(): TextView {
+        return keyLabel("", Gravity.CENTER, theme.fontSizeSp.coerceIn(10, 18))
+    }
+
+    private fun configureSuggestionChipView(view: TextView, chip: SuggestionChip) {
+        view.text = chip.label
+        view.textSize = keyTextSize(chip.label).toFloat()
+        view.gravity = Gravity.CENTER
         view.setTextColor(theme.keyText)
         view.background = panel(
             if (chip.action == SuggestionAction.ADD_WORD) brightenColor(theme.keyBg, 1.12f, 28) else theme.keyBg,
@@ -260,7 +297,6 @@ class RetuiKeyboardService : InputMethodService() {
                 SuggestionAction.COMMIT -> commitSuggestion(chip.word)
             }
         })
-        return view
     }
 
     private fun suggestionChips(): List<SuggestionChip> {
@@ -345,6 +381,116 @@ class RetuiKeyboardService : InputMethodService() {
             addKeyRow(parent, arrowRow(), if (landscape) 26 else 28)
         }
         addKeyRow(parent, bottomRow(), bottomHeight)
+    }
+
+    private fun addSplitTextRows(parent: LinearLayout) {
+        val keyHeight = 28
+        val bottomHeight = 32
+        if (symbols) {
+            addSplitSymbolRows(parent, keyHeight, bottomHeight)
+            return
+        }
+
+        if (layout.showNumberRow) {
+            addSplitKeyRow(
+                parent = parent,
+                left = numberRow().take(5),
+                center = splitSpecialRow(0),
+                right = numberRow().drop(5),
+                heightDp = 26
+            )
+        }
+
+        addSplitKeyRow(
+            parent = parent,
+            left = textRow("qwert", longLabels = if (layout.showNumberRow) null else "12345"),
+            center = splitSpecialRow(if (layout.showNumberRow) 1 else 0),
+            right = textRow("yuiop", longLabels = if (layout.showNumberRow) null else "67890"),
+            heightDp = keyHeight
+        )
+        addSplitKeyRow(
+            parent = parent,
+            left = textRow("asdfg"),
+            center = splitSpecialRow(if (layout.showNumberRow) 2 else 1),
+            right = textRow("ghjkl"),
+            heightDp = keyHeight
+        )
+        addSplitKeyRow(
+            parent = parent,
+            left = mutableListOf(KeySpec(shiftLabel(), 1.15f, Special.SHIFT)).apply {
+                addAll(textRow("zxcv"))
+            },
+            center = if (layout.showNumberRow) emptyList() else splitSpecialRow(2),
+            right = textRow("vbnm").apply {
+                add(KeySpec(ICON_BACKSPACE, 1.15f, Special.BACKSPACE))
+            },
+            heightDp = keyHeight
+        )
+        if (layout.showArrowRow) {
+            addSplitKeyRow(
+                parent = parent,
+                left = listOf(
+                    KeySpec(ICON_LEFT, 1f, keyCode = KeyEvent.KEYCODE_DPAD_LEFT),
+                    KeySpec(ICON_UP, 1f, keyCode = KeyEvent.KEYCODE_DPAD_UP)
+                ),
+                center = emptyList(),
+                right = listOf(
+                    KeySpec(ICON_DOWN, 1f, keyCode = KeyEvent.KEYCODE_DPAD_DOWN),
+                    KeySpec(ICON_RIGHT, 1f, keyCode = KeyEvent.KEYCODE_DPAD_RIGHT)
+                ),
+                heightDp = 26,
+                leftWeight = 5f,
+                centerWeight = 2.4f,
+                rightWeight = 5f
+            )
+        }
+        addSplitBottomRow(parent, bottomHeight)
+    }
+
+    private fun addSplitSymbolRows(parent: LinearLayout, keyHeight: Int, bottomHeight: Int) {
+        val first = symbolRowOne()
+        val second = symbolRowTwo()
+        val third = symbolRowThree()
+        addSplitKeyRow(parent, first.take(5), splitSpecialRow(0), first.drop(5), keyHeight)
+        addSplitKeyRow(parent, second.take(5), splitSpecialRow(1), second.drop(5), keyHeight)
+        addSplitKeyRow(parent, third.take(5), splitSpecialRow(2), third.drop(5), keyHeight)
+        addSplitBottomRow(parent, bottomHeight)
+    }
+
+    private fun splitSpecialRow(index: Int): List<KeySpec> {
+        return when (index) {
+            0 -> listOf(
+                KeySpec(ICON_ESCAPE, 1f, keyCode = KeyEvent.KEYCODE_ESCAPE, specialStyle = true),
+                KeySpec(ICON_TAB, 1f, keyCode = KeyEvent.KEYCODE_TAB, specialStyle = true)
+            )
+            1 -> listOf(
+                KeySpec("CTRL", 1f, Special.CTRL, specialStyle = true),
+                KeySpec("ALT", 1f, Special.ALT, specialStyle = true)
+            )
+            else -> listOf(
+                KeySpec("SUPER", 1f, Special.SUPER, specialStyle = true),
+                KeySpec("DEL", 1f, Special.FORWARD_DELETE, specialStyle = true)
+            )
+        }
+    }
+
+    private fun addSplitBottomRow(parent: LinearLayout, heightDp: Int) {
+        val right = mutableListOf<KeySpec>()
+        if (layout.quickPeriod) right.add(KeySpec(".", 0.9f, text = "."))
+        right.add(KeySpec(enterLabel(), 1.35f, Special.ENTER))
+        addSplitKeyRow(
+            parent = parent,
+            left = listOf(
+                KeySpec(if (symbols) "ABC" else "123", 1.2f, Special.SYMBOLS),
+                KeySpec(",", 0.8f, text = ",")
+            ),
+            center = listOf(KeySpec("SPACE", 1f, Special.SPACE)),
+            right = right,
+            heightDp = heightDp,
+            leftWeight = 2.6f,
+            centerWeight = 5.2f,
+            rightWeight = 2.6f
+        )
     }
 
     private fun addPortraitTextRows(parent: LinearLayout) {
@@ -576,6 +722,43 @@ class RetuiKeyboardService : InputMethodService() {
         parent.addView(row, rowParams(heightDp))
     }
 
+    private fun addSplitKeyRow(
+        parent: LinearLayout,
+        left: List<KeySpec>,
+        center: List<KeySpec>,
+        right: List<KeySpec>,
+        heightDp: Int,
+        leftWeight: Float = 5f,
+        centerWeight: Float = 2.4f,
+        rightWeight: Float = 5f
+    ) {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER
+        row.setPadding(dp(layout.keyGapDp), dp(1), dp(layout.keyGapDp), dp(1))
+        row.addView(splitKeyCluster(left), LinearLayout.LayoutParams(0, -1, leftWeight))
+        row.addView(splitKeyCluster(center), LinearLayout.LayoutParams(0, -1, centerWeight))
+        row.addView(splitKeyCluster(right), LinearLayout.LayoutParams(0, -1, rightWeight))
+        parent.addView(row, rowParams(heightDp))
+    }
+
+    private fun splitKeyCluster(keys: List<KeySpec>): LinearLayout {
+        val cluster = LinearLayout(this)
+        cluster.orientation = LinearLayout.HORIZONTAL
+        cluster.gravity = Gravity.CENTER
+        for (key in keys) {
+            val params = LinearLayout.LayoutParams(0, -1, key.weight)
+            val gap = dp(layout.keyGapDp)
+            params.setMargins(gap, gap, gap, gap)
+            if (key.special == Special.SPACER) {
+                cluster.addView(View(this), params)
+            } else {
+                cluster.addView(keyView(key), params)
+            }
+        }
+        return cluster
+    }
+
     private fun addRailKey(parent: LinearLayout, label: String, action: () -> Unit) {
         val view = actionKey(label, action)
         val params = LinearLayout.LayoutParams(-1, 0, 1f)
@@ -588,8 +771,13 @@ class RetuiKeyboardService : InputMethodService() {
             return actionKey(
                 key.label,
                 action = { handleKey(key) },
-                repeatAction = if (key.special == Special.BACKSPACE) { { backspace() } } else null,
-                active = key.special == Special.SHIFT && capsLocked
+                repeatAction = when (key.special) {
+                    Special.BACKSPACE -> { { backspace() } }
+                    Special.FORWARD_DELETE -> { { forwardDelete() } }
+                    else -> null
+                },
+                active = isSpecialKeyActive(key.special),
+                specialStyle = key.specialStyle
             )
         }
 
@@ -615,15 +803,26 @@ class RetuiKeyboardService : InputMethodService() {
         return view
     }
 
+    private fun isSpecialKeyActive(special: Special?): Boolean {
+        return when (special) {
+            Special.SHIFT -> capsLocked
+            Special.CTRL -> ctrlLatched
+            Special.ALT -> altLatched
+            Special.SUPER -> metaLatched
+            else -> false
+        }
+    }
+
     private fun actionKey(
         label: String,
         action: () -> Unit,
         repeatAction: (() -> Unit)? = null,
-        active: Boolean = false
+        active: Boolean = false,
+        specialStyle: Boolean = false
     ): TextView {
         val view = keyLabel(label, Gravity.CENTER, keyTextSize(label))
-        view.setTextColor(theme.keyText)
-        view.background = keyBackground(active)
+        view.setTextColor(if (specialStyle) theme.specialKeyText else theme.keyText)
+        view.background = if (specialStyle) specialKeyBackground(active) else keyBackground(active)
         bindImmediateKey(view, action, repeatAction)
         return view
     }
@@ -874,20 +1073,47 @@ class RetuiKeyboardService : InputMethodService() {
             cachedBackgroundBitmap = null
             return null
         }
-        if (uri == cachedBackgroundUri && cachedBackgroundBitmap != null) {
-            return cachedBackgroundBitmap
+        val cached = cachedBackgroundBitmap
+        if (uri == cachedBackgroundUri && cached != null && !cached.isRecycled) {
+            return cached
         }
 
         return try {
-            contentResolver.openInputStream(Uri.parse(uri)).use { input ->
-                val decoded = BitmapFactory.decodeStream(input)
-                cachedBackgroundUri = uri
-                cachedBackgroundBitmap = decoded
-                decoded
-            }
+            val decoded = decodeSampledBackgroundBitmap(Uri.parse(uri)) ?: return null
+            cachedBackgroundUri = uri
+            cachedBackgroundBitmap = decoded
+            decoded
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun decodeSampledBackgroundBitmap(uri: Uri): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri).use { input ->
+            BitmapFactory.decodeStream(input, null, bounds)
+        }
+        val targetWidth = resources.displayMetrics.widthPixels.coerceAtLeast(1)
+        val targetHeight = resources.displayMetrics.heightPixels.coerceAtLeast(1)
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = backgroundSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight)
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        return contentResolver.openInputStream(uri).use { input ->
+            BitmapFactory.decodeStream(input, null, options)
+        }
+    }
+
+    private fun backgroundSampleSize(sourceWidth: Int, sourceHeight: Int, targetWidth: Int, targetHeight: Int): Int {
+        if (sourceWidth <= 0 || sourceHeight <= 0) return 1
+        var sampleSize = 1
+        while (
+            sourceWidth / (sampleSize * 2) >= targetWidth ||
+            sourceHeight / (sampleSize * 2) >= targetHeight
+        ) {
+            sampleSize *= 2
+        }
+        return sampleSize.coerceAtLeast(1)
     }
 
     private fun rowParams(heightDp: Int): LinearLayout.LayoutParams {
@@ -924,9 +1150,20 @@ class RetuiKeyboardService : InputMethodService() {
         return panel(keyFillColor(active), theme.border, 5)
     }
 
+    private fun specialKeyBackground(active: Boolean): Drawable {
+        val fill = specialKeyFillColor(active)
+        return panel(fill, theme.border, 5)
+    }
+
     private fun keyFillColor(active: Boolean): Int {
         if (!active) return theme.keyBg
         return brightenColor(theme.keyBg, 1.16f, 36)
+    }
+
+    private fun specialKeyFillColor(active: Boolean): Int {
+        val base = if (theme.specialKeyBg != 0) theme.specialKeyBg else theme.border
+        if (!active) return base
+        return brightenColor(base, 1.14f, 32)
     }
 
     private fun brightenColor(color: Int, factor: Float, alphaBoost: Int): Int {
@@ -940,20 +1177,33 @@ class RetuiKeyboardService : InputMethodService() {
     private fun handleKey(key: KeySpec) {
         when (key.special) {
             Special.BACKSPACE -> backspace()
-            Special.ENTER -> enter()
+            Special.FORWARD_DELETE -> forwardDelete()
+            Special.ENTER -> {
+                if (hasLatchedModifiers()) sendKeyCode(KeyEvent.KEYCODE_ENTER) else enter()
+            }
             Special.SHIFT -> handleShift()
-            Special.SPACE -> commitFromKey(" ")
+            Special.SPACE -> {
+                if (hasLatchedModifiers()) sendKeyCode(KeyEvent.KEYCODE_SPACE) else commitFromKey(" ")
+            }
             Special.SYMBOLS -> {
                 symbols = !symbols
                 shifted = false
                 capsLocked = false
+                clearLatchedModifiers()
                 setInputView(buildKeyboardView())
             }
+            Special.CTRL -> toggleModifier(Special.CTRL)
+            Special.ALT -> toggleModifier(Special.ALT)
+            Special.SUPER -> toggleModifier(Special.SUPER)
             Special.HIDE -> requestHideSelf(0)
             Special.SPACER, null -> {
                 when {
                     key.keyCode != null -> sendKeyCode(key.keyCode)
-                    key.text != null -> commitFromKey(key.text)
+                    key.text != null -> {
+                        if (!sendTextWithLatchedModifiers(key.text)) {
+                            commitFromKey(key.text)
+                        }
+                    }
                 }
             }
         }
@@ -964,6 +1214,28 @@ class RetuiKeyboardService : InputMethodService() {
             key.longKeyCode != null -> sendKeyCode(key.longKeyCode)
             key.longText != null -> commitFromKey(key.longText)
         }
+    }
+
+    private fun toggleModifier(special: Special) {
+        when (special) {
+            Special.CTRL -> ctrlLatched = !ctrlLatched
+            Special.ALT -> altLatched = !altLatched
+            Special.SUPER -> metaLatched = !metaLatched
+            else -> return
+        }
+        setInputView(buildKeyboardView())
+    }
+
+    private fun hasLatchedModifiers(): Boolean {
+        return ctrlLatched || altLatched || metaLatched
+    }
+
+    private fun clearLatchedModifiers(): Boolean {
+        val changed = hasLatchedModifiers()
+        ctrlLatched = false
+        altLatched = false
+        metaLatched = false
+        return changed
     }
 
     private fun startRepeat(action: () -> Unit) {
@@ -981,6 +1253,13 @@ class RetuiKeyboardService : InputMethodService() {
     private fun stopRepeat() {
         repeatRunnable?.let { repeatHandler.removeCallbacks(it) }
         repeatRunnable = null
+    }
+
+    private fun cancelSuggestionRefresh() {
+        if (suggestionRefreshPosted) {
+            repeatHandler.removeCallbacks(suggestionRefreshRunnable)
+            suggestionRefreshPosted = false
+        }
     }
 
     private fun commit(value: String) {
@@ -1042,6 +1321,10 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun backspace() {
+        if (hasLatchedModifiers()) {
+            sendKeyCode(KeyEvent.KEYCODE_DEL)
+            return
+        }
         val ic = currentInputConnection ?: return
         val selected = ic.getSelectedText(0)
         if (!selected.isNullOrEmpty()) {
@@ -1050,6 +1333,10 @@ class RetuiKeyboardService : InputMethodService() {
             ic.deleteSurroundingText(1, 0)
         }
         refreshSuggestionStripSoon()
+    }
+
+    private fun forwardDelete() {
+        sendKeyCode(KeyEvent.KEYCODE_FORWARD_DEL)
     }
 
     private fun enter() {
@@ -1066,9 +1353,55 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun sendKeyCode(keyCode: Int, ic: InputConnection? = currentInputConnection) {
         ic ?: return
-        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
-        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+        val metaState = latchedMetaState()
+        val eventTime = SystemClock.uptimeMillis()
+        ic.sendKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN, keyCode, 0, metaState))
+        ic.sendKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP, keyCode, 0, metaState))
+        val clearedModifiers = clearLatchedModifiers()
+        if (clearedModifiers) {
+            setInputView(buildKeyboardView())
+            return
+        }
         refreshSuggestionStripSoon()
+    }
+
+    private fun sendTextWithLatchedModifiers(value: String): Boolean {
+        if (!hasLatchedModifiers()) return false
+        val keyCode = keyCodeForText(value)
+        if (keyCode == null) {
+            if (clearLatchedModifiers()) setInputView(buildKeyboardView())
+            return false
+        }
+        sendKeyCode(keyCode)
+        return true
+    }
+
+    private fun latchedMetaState(): Int {
+        var state = 0
+        if (ctrlLatched) state = state or KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
+        if (altLatched) state = state or KeyEvent.META_ALT_ON or KeyEvent.META_ALT_LEFT_ON
+        if (metaLatched) state = state or KeyEvent.META_META_ON or KeyEvent.META_META_LEFT_ON
+        return state
+    }
+
+    private fun keyCodeForText(value: String): Int? {
+        val char = value.singleOrNull()?.lowercaseChar() ?: return null
+        return when (char) {
+            in 'a'..'z' -> KeyEvent.KEYCODE_A + (char - 'a')
+            in '0'..'9' -> KeyEvent.KEYCODE_0 + (char - '0')
+            ' ' -> KeyEvent.KEYCODE_SPACE
+            ',' -> KeyEvent.KEYCODE_COMMA
+            '.' -> KeyEvent.KEYCODE_PERIOD
+            '-' -> KeyEvent.KEYCODE_MINUS
+            '=' -> KeyEvent.KEYCODE_EQUALS
+            '/' -> KeyEvent.KEYCODE_SLASH
+            '\\' -> KeyEvent.KEYCODE_BACKSLASH
+            ';' -> KeyEvent.KEYCODE_SEMICOLON
+            '\'' -> KeyEvent.KEYCODE_APOSTROPHE
+            '[' -> KeyEvent.KEYCODE_LEFT_BRACKET
+            ']' -> KeyEvent.KEYCODE_RIGHT_BRACKET
+            else -> null
+        }
     }
 
     private fun learnFinishedWord(word: String?) {
@@ -1085,7 +1418,9 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun refreshSuggestionStripSoon() {
-        repeatHandler.post { refreshSuggestionStrip() }
+        if (suggestionRefreshPosted) return
+        suggestionRefreshPosted = true
+        repeatHandler.post(suggestionRefreshRunnable)
     }
 
     private fun refreshSuggestionStrip() {
@@ -1141,6 +1476,9 @@ class RetuiKeyboardService : InputMethodService() {
         symbols = false
         shifted = false
         capsLocked = false
+        ctrlLatched = false
+        altLatched = false
+        metaLatched = false
         lastShiftTapAtMs = 0L
         pendingAddWord = null
     }
@@ -1162,7 +1500,9 @@ class RetuiKeyboardService : InputMethodService() {
         if (bundle.keySet().isNotEmpty()) applyContextBundle(bundle, ThemeSource.LAUNCHER)
     }
 
-    private fun applyContextBundle(bundle: Bundle, source: ThemeSource) {
+    private fun applyContextBundle(bundle: Bundle, source: ThemeSource): Boolean {
+        val previousTheme = theme
+        val previousSymbols = symbols
         if (source == ThemeSource.LAUNCHER) {
             if (containsThemeValue(bundle)) {
                 val launcherTheme = themeFromBundle(
@@ -1181,6 +1521,7 @@ class RetuiKeyboardService : InputMethodService() {
         readString(bundle, "keyboard_context", "retui_context", "path")?.let { contextLabel = compactContext(it) }
         readString(bundle, "keyboard_mode", "retui_mode", "mode")?.let { modeLabel = it.uppercase().take(14) }
         readBoolean(bundle, null, "keyboard_symbols", "symbols")?.let { symbols = it }
+        return theme != previousTheme || symbols != previousSymbols
     }
 
     private fun themeFromBundle(base: ThemeState, bundle: Bundle): ThemeState {
@@ -1226,6 +1567,21 @@ class RetuiKeyboardService : InputMethodService() {
                 "module_text_color",
                 "input_text_color",
                 "input_text"
+            ),
+            specialKeyBg = readColor(
+                bundle,
+                base.specialKeyBg,
+                "keyboard_special_key_bg",
+                "keyboard_special_key_background",
+                "special_key_bg_color",
+                "special_key_background_color"
+            ),
+            specialKeyText = readColor(
+                bundle,
+                base.specialKeyText,
+                "keyboard_special_key_text",
+                "keyboard_special_key_text_color",
+                "special_key_text_color"
             ),
             outputBg = readColor(bundle, base.outputBg, "output_bg_color", "output_background_color", "output_bg"),
             outputBorder = readColor(bundle, base.outputBorder, "output_border_color", "output_border", "terminal_border_color"),
@@ -1305,13 +1661,16 @@ class RetuiKeyboardService : InputMethodService() {
         )
     }
 
-    private fun loadPersistedTheme() {
+    private fun loadPersistedTheme(): Boolean {
         val prefix = when {
             hasKeyboardThemeOverride() -> THEME_OVERRIDE_PREFIX
             prefs.getBoolean(KeyboardPrefs.KEY_THEME_LAUNCHER_AVAILABLE, false) -> KeyboardPrefs.KEY_THEME_LAUNCHER_PREFIX
             else -> null
         }
-        theme = readThemeSnapshot(prefix, ThemeState())
+        val next = readThemeSnapshot(prefix, ThemeState())
+        val changed = next != theme
+        theme = next
+        return changed
     }
 
     private fun hasKeyboardThemeOverride(): Boolean {
@@ -1330,6 +1689,8 @@ class RetuiKeyboardService : InputMethodService() {
             headerText = prefs.getInt(prefix + "headerText", fallback.headerText),
             keyBg = prefs.getInt(prefix + "keyBg", fallback.keyBg),
             keyText = prefs.getInt(prefix + "keyText", fallback.keyText),
+            specialKeyBg = prefs.getInt(prefix + "specialKeyBg", fallback.specialKeyBg),
+            specialKeyText = prefs.getInt(prefix + "specialKeyText", fallback.specialKeyText),
             outputBg = prefs.getInt(prefix + "outputBg", fallback.outputBg),
             outputBorder = prefs.getInt(prefix + "outputBorder", fallback.outputBorder),
             fontSizeSp = prefs.getInt(prefix + "fontSizeSp", fallback.fontSizeSp),
@@ -1358,6 +1719,8 @@ class RetuiKeyboardService : InputMethodService() {
             .putInt(prefix + "headerText", next.headerText)
             .putInt(prefix + "keyBg", next.keyBg)
             .putInt(prefix + "keyText", next.keyText)
+            .putInt(prefix + "specialKeyBg", next.specialKeyBg)
+            .putInt(prefix + "specialKeyText", next.specialKeyText)
             .putInt(prefix + "outputBg", next.outputBg)
             .putInt(prefix + "outputBorder", next.outputBorder)
             .putInt(prefix + "fontSizeSp", next.fontSizeSp)
@@ -1491,6 +1854,8 @@ class RetuiKeyboardService : InputMethodService() {
         val headerText: Int = Color.rgb(194, 255, 210),
         val keyBg: Int = Color.rgb(13, 29, 19),
         val keyText: Int = Color.rgb(154, 255, 181),
+        val specialKeyBg: Int = 0,
+        val specialKeyText: Int = Color.WHITE,
         val outputBg: Int = 0,
         val outputBorder: Int = 0,
         val fontSizeSp: Int = 14,
@@ -1515,7 +1880,8 @@ class RetuiKeyboardService : InputMethodService() {
         val keyCode: Int? = null,
         val longLabel: String? = null,
         val longText: String? = null,
-        val longKeyCode: Int? = null
+        val longKeyCode: Int? = null,
+        val specialStyle: Boolean = false
     )
 
     private data class SuggestionChip(
@@ -1532,10 +1898,14 @@ class RetuiKeyboardService : InputMethodService() {
 
     private enum class Special {
         BACKSPACE,
+        FORWARD_DELETE,
         ENTER,
         SHIFT,
         SPACE,
         SYMBOLS,
+        CTRL,
+        ALT,
+        SUPER,
         HIDE,
         SPACER
     }
@@ -1874,6 +2244,13 @@ class RetuiKeyboardService : InputMethodService() {
             "module_button_text_color",
             "input_text_color",
             "input_text",
+            "keyboard_special_key_bg",
+            "keyboard_special_key_background",
+            "special_key_bg_color",
+            "special_key_background_color",
+            "keyboard_special_key_text",
+            "keyboard_special_key_text_color",
+            "special_key_text_color",
             "output_bg_color",
             "output_background_color",
             "output_bg",
