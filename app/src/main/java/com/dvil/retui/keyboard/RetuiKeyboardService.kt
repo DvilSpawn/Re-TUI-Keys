@@ -82,6 +82,7 @@ class RetuiKeyboardService : InputMethodService() {
     override fun onCreate() {
         super.onCreate()
         prefs = getSharedPreferences(KeyboardPrefs.PREFS_NAME, MODE_PRIVATE)
+        LocalDictionary.preload(applicationContext)
         loadPersistedTheme()
         makeImeWindowTransparent()
     }
@@ -94,6 +95,7 @@ class RetuiKeyboardService : InputMethodService() {
         super.onStartInput(attribute, restarting)
         loadPersistedTheme()
         currentInfo = attribute
+        if (!restarting) resetTransientLayoutState()
         applyEditorInfo(attribute)
     }
 
@@ -109,12 +111,14 @@ class RetuiKeyboardService : InputMethodService() {
     override fun onFinishInputView(finishingInput: Boolean) {
         stopRepeat()
         suggestionStrip = null
+        resetTransientLayoutState()
         super.onFinishInputView(finishingInput)
     }
 
     override fun onFinishInput() {
         stopRepeat()
         suggestionStrip = null
+        resetTransientLayoutState()
         super.onFinishInput()
     }
 
@@ -255,23 +259,33 @@ class RetuiKeyboardService : InputMethodService() {
     private fun suggestionChips(): List<SuggestionChip> {
         val currentWord = currentWordBeforeCursor()
         val out = mutableListOf<SuggestionChip>()
+        val hasActiveWord = currentWord.any { LocalDictionary.isWordChar(it) }
         val normalized = LocalDictionary.normalizeWord(currentWord)
 
-        if (normalized != null) {
+        if (hasActiveWord) {
             pendingAddWord = null
-            if (!LocalDictionary.containsKnownWord(prefs, normalized)) {
+            val suggestions = LocalDictionary.suggest(prefs, currentWord, 5)
+            suggestions.forEach { suggestion ->
+                out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
+            }
+            if (
+                out.size < 5 &&
+                suggestions.isEmpty() &&
+                normalized != null &&
+                normalized.length >= ACTIVE_ADD_WORD_MIN_LENGTH &&
+                !LocalDictionary.containsKnownWord(prefs, normalized)
+            ) {
                 out.add(SuggestionChip("+ ${currentWord.trim()}", normalized, SuggestionAction.ADD_WORD, 1.15f))
             }
-        } else if (normalized.isNullOrBlank()) {
+        } else {
             val pending = pendingAddWord
             if (pending != null && !LocalDictionary.containsKnownWord(prefs, pending)) {
                 out.add(SuggestionChip("+ ${LocalDictionary.displayWord(pending)}", pending, SuggestionAction.ADD_WORD, 1.15f))
+            } else {
+                LocalDictionary.suggestNextWords(prefs, previousWordBeforeCursor(), 5).forEach { suggestion ->
+                    out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
+                }
             }
-        }
-
-        val remaining = (5 - out.size).coerceAtLeast(1)
-        LocalDictionary.suggest(prefs, currentWord, remaining).forEach { suggestion ->
-            out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
         }
 
         return out
@@ -1082,6 +1096,23 @@ class RetuiKeyboardService : InputMethodService() {
         return text.substring(start)
     }
 
+    private fun previousWordBeforeCursor(): String? {
+        val text = currentInputConnection?.getTextBeforeCursor(128, 0)?.toString() ?: return null
+        if (text.isBlank()) return null
+        var end = text.length
+        var crossedBoundary = false
+        while (end > 0 && !isWordChar(text[end - 1])) {
+            crossedBoundary = true
+            end--
+        }
+        if (!crossedBoundary || end <= 0) return null
+        var start = end
+        while (start > 0 && isWordChar(text[start - 1])) {
+            start--
+        }
+        return text.substring(start, end).takeIf { it.isNotBlank() }
+    }
+
     private fun isWordBoundary(value: String): Boolean {
         if (value.isEmpty()) return false
         return value.any { !isWordChar(it) }
@@ -1097,6 +1128,14 @@ class RetuiKeyboardService : InputMethodService() {
         modeLabel = if (isCommandLikeField(info)) "COMMAND" else "TEXT"
         info.extras?.let { applyContextBundle(it, persist = true) }
         applyPrivateImeOptions(info.privateImeOptions)
+    }
+
+    private fun resetTransientLayoutState() {
+        symbols = false
+        shifted = false
+        capsLocked = false
+        lastShiftTapAtMs = 0L
+        pendingAddWord = null
     }
 
     private fun applyPrivateImeOptions(raw: String?) {
@@ -1740,7 +1779,8 @@ class RetuiKeyboardService : InputMethodService() {
         private const val REPEAT_INTERVAL_MS = 42L
         private const val SHIFT_DOUBLE_TAP_MS = 360L
         private const val LANDSCAPE_MAX_HEIGHT_PERCENT = 125
-        private const val ICON_BACKSPACE = "DEL"
+        private const val ACTIVE_ADD_WORD_MIN_LENGTH = 4
+        private const val ICON_BACKSPACE = "⌫"
         private const val ICON_CONTEXT = "⌘"
         private const val ICON_DONE = "✓"
         private const val ICON_DOWN = "↓"
