@@ -82,6 +82,7 @@ class RetuiKeyboardService : InputMethodService() {
     override fun onCreate() {
         super.onCreate()
         prefs = getSharedPreferences(KeyboardPrefs.PREFS_NAME, MODE_PRIVATE)
+        KeyboardPrefs.migrateLayout(prefs)
         LocalDictionary.preload(applicationContext)
         loadPersistedTheme()
         makeImeWindowTransparent()
@@ -149,9 +150,15 @@ class RetuiKeyboardService : InputMethodService() {
     override fun onAppPrivateCommand(action: String?, data: Bundle?) {
         super.onAppPrivateCommand(action, data)
         when (action) {
-            ACTION_APPLY_CONTEXT, ACTION_APPLY_THEME -> {
+            ACTION_APPLY_CONTEXT -> {
                 if (data != null) {
-                    applyContextBundle(data, persist = true)
+                    applyContextBundle(data, ThemeSource.LAUNCHER)
+                    setInputView(buildKeyboardView())
+                }
+            }
+            ACTION_APPLY_THEME -> {
+                if (data != null) {
+                    applyContextBundle(data, ThemeSource.PREVIEW)
                     setInputView(buildKeyboardView())
                 }
             }
@@ -856,7 +863,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun keyboardBackground(): Drawable? {
-        val bitmap = backgroundBitmap() ?: return null
+        val bitmap = backgroundBitmap() ?: return ColorDrawable(theme.bg)
         return KeyboardBackgroundDrawable(theme.bg, bitmap, layout.backgroundImageOpacity)
     }
 
@@ -1126,7 +1133,7 @@ class RetuiKeyboardService : InputMethodService() {
         if (info == null) return
         contextLabel = compactPackageName(info.packageName)
         modeLabel = if (isCommandLikeField(info)) "COMMAND" else "TEXT"
-        info.extras?.let { applyContextBundle(it, persist = true) }
+        info.extras?.let { applyContextBundle(it, ThemeSource.LAUNCHER) }
         applyPrivateImeOptions(info.privateImeOptions)
     }
 
@@ -1152,32 +1159,53 @@ class RetuiKeyboardService : InputMethodService() {
             if (index <= 0 || index >= trimmed.length - 1) return@forEach
             bundle.putString(trimmed.substring(0, index).trim(), trimmed.substring(index + 1).trim())
         }
-        if (bundle.keySet().isNotEmpty()) applyContextBundle(bundle, persist = true)
+        if (bundle.keySet().isNotEmpty()) applyContextBundle(bundle, ThemeSource.LAUNCHER)
     }
 
-    private fun applyContextBundle(bundle: Bundle, persist: Boolean) {
-        theme = theme.copy(
-            bg = readColor(bundle, theme.bg, "theme_bg", "background_color", "theme_background_color"),
-            text = readColor(bundle, theme.text, "theme_text", "output_text_color", "theme_text_color"),
-            border = readColor(bundle, theme.border, "theme_border", "terminal_border_color", "module_border_color"),
-            panelBg = readColor(bundle, theme.panelBg, "terminal_bg", "terminal_window_background_color", "module_bg_color"),
+    private fun applyContextBundle(bundle: Bundle, source: ThemeSource) {
+        if (source == ThemeSource.LAUNCHER) {
+            if (containsThemeValue(bundle)) {
+                val launcherTheme = themeFromBundle(
+                    readThemeSnapshot(KeyboardPrefs.KEY_THEME_LAUNCHER_PREFIX, ThemeState()),
+                    bundle
+                )
+                saveThemeSnapshot(launcherTheme, KeyboardPrefs.KEY_THEME_LAUNCHER_PREFIX)
+                if (!hasKeyboardThemeOverride()) {
+                    theme = launcherTheme
+                }
+            }
+        } else {
+            theme = themeFromBundle(theme, bundle)
+        }
+
+        readString(bundle, "keyboard_context", "retui_context", "path")?.let { contextLabel = compactContext(it) }
+        readString(bundle, "keyboard_mode", "retui_mode", "mode")?.let { modeLabel = it.uppercase().take(14) }
+        readBoolean(bundle, null, "keyboard_symbols", "symbols")?.let { symbols = it }
+    }
+
+    private fun themeFromBundle(base: ThemeState, bundle: Bundle): ThemeState {
+        return base.copy(
+            bg = readColor(bundle, base.bg, "theme_bg", "background_color", "theme_background_color"),
+            text = readColor(bundle, base.text, "theme_text", "output_text_color", "theme_text_color"),
+            border = readColor(bundle, base.border, "theme_border", "terminal_border_color", "module_border_color"),
+            panelBg = readColor(bundle, base.panelBg, "terminal_bg", "terminal_window_background_color", "module_bg_color"),
             headerBg = readColor(
                 bundle,
-                theme.headerBg,
+                base.headerBg,
                 "terminal_header_background_color",
                 "terminal_header_tab_background_color",
                 "module_header_bg_color"
             ),
             headerTabBorder = readColor(
                 bundle,
-                theme.headerTabBorder,
+                base.headerTabBorder,
                 "terminal_header_border_color",
                 "terminal_header_tab_border_color",
                 "header_tab_border_color"
             ),
             headerText = readColor(
                 bundle,
-                theme.headerText,
+                base.headerText,
                 "module_text_color",
                 "module_header_text_color",
                 "terminal_header_text_color",
@@ -1185,7 +1213,7 @@ class RetuiKeyboardService : InputMethodService() {
             ),
             keyBg = readColor(
                 bundle,
-                theme.keyBg,
+                base.keyBg,
                 "module_button_background_color",
                 "module_button_bg_color",
                 "input_bg_color",
@@ -1193,35 +1221,35 @@ class RetuiKeyboardService : InputMethodService() {
             ),
             keyText = readColor(
                 bundle,
-                theme.keyText,
+                base.keyText,
                 "module_button_text_color",
                 "module_text_color",
                 "input_text_color",
                 "input_text"
             ),
-            outputBg = readColor(bundle, theme.outputBg, "output_bg_color", "output_background_color", "output_bg"),
-            outputBorder = readColor(bundle, theme.outputBorder, "output_border_color", "output_border", "terminal_border_color"),
-            fontSizeSp = readInt(bundle, theme.fontSizeSp, "input_font_size", "keyboard_font_size"),
+            outputBg = readColor(bundle, base.outputBg, "output_bg_color", "output_background_color", "output_bg"),
+            outputBorder = readColor(bundle, base.outputBorder, "output_border_color", "output_border", "terminal_border_color"),
+            fontSizeSp = readInt(bundle, base.fontSizeSp, "input_font_size", "keyboard_font_size"),
             dashedBorders = readBoolean(
                 bundle,
-                theme.dashedBorders,
+                base.dashedBorders,
                 "enable_dashed_border",
                 "dashed_borders",
                 "dashed_border",
                 "terminal_dashed_borders"
-            ) ?: theme.dashedBorders,
-            dashLengthDp = readInt(bundle, theme.dashLengthDp, "dashed_border_dash_length", "dash_length", "terminal_dash_length"),
-            dashGapDp = readInt(bundle, theme.dashGapDp, "dashed_border_gap_length", "dash_gap", "terminal_dash_gap"),
+            ) ?: base.dashedBorders,
+            dashLengthDp = readInt(bundle, base.dashLengthDp, "dashed_border_dash_length", "dash_length", "terminal_dash_length"),
+            dashGapDp = readInt(bundle, base.dashGapDp, "dashed_border_gap_length", "dash_gap", "terminal_dash_gap"),
             dashedStrokeWidthDp = readFloat(
                 bundle,
-                theme.dashedStrokeWidthDp,
+                base.dashedStrokeWidthDp,
                 "dashed_border_stroke_width",
                 "dashed_border_stroke_width_dp",
                 "dash_stroke_width"
             ),
             moduleCornerRadiusDp = readInt(
                 bundle,
-                theme.moduleCornerRadiusDp,
+                base.moduleCornerRadiusDp,
                 "module_corner_radius",
                 "module_corner_radius_dp",
                 "corner_radius",
@@ -1229,21 +1257,21 @@ class RetuiKeyboardService : InputMethodService() {
             ),
             outputCornerRadiusDp = readInt(
                 bundle,
-                theme.outputCornerRadiusDp,
+                base.outputCornerRadiusDp,
                 "output_corner_radius",
                 "output_corner_radius_dp",
                 "terminal_corner_radius"
             ),
             headerCornerRadiusDp = readInt(
                 bundle,
-                theme.headerCornerRadiusDp,
+                base.headerCornerRadiusDp,
                 "header_corner_radius",
                 "header_corner_radius_dp",
                 "terminal_header_corner_radius"
             ),
             moduleBodyTextSizeSp = readInt(
                 bundle,
-                theme.moduleBodyTextSizeSp,
+                base.moduleBodyTextSizeSp,
                 "module_body_text_size",
                 "module_body_text_size_sp",
                 "module_output_text_size",
@@ -1251,7 +1279,7 @@ class RetuiKeyboardService : InputMethodService() {
             ),
             outputHeaderTextSizeSp = readInt(
                 bundle,
-                theme.outputHeaderTextSizeSp,
+                base.outputHeaderTextSizeSp,
                 "output_header_text_size",
                 "output_header_text_size_sp",
                 "module_header_text_size",
@@ -1260,83 +1288,97 @@ class RetuiKeyboardService : InputMethodService() {
             ),
             cyberdeckMode = readBoolean(
                 bundle,
-                theme.cyberdeckMode,
+                base.cyberdeckMode,
                 "enable_cyberdeck_mode",
                 "cyberdeck_mode",
                 "cyberdeck",
                 "enable_cyberdeck"
-            ) ?: theme.cyberdeckMode,
+            ) ?: base.cyberdeckMode,
             crtFilter = readBoolean(
                 bundle,
-                theme.crtFilter,
+                base.crtFilter,
                 "enable_crt_filter",
                 "crt_filter",
                 "crt",
                 "enable_crt"
-            ) ?: theme.crtFilter
+            ) ?: base.crtFilter
         )
-
-        readString(bundle, "keyboard_context", "retui_context", "path")?.let { contextLabel = compactContext(it) }
-        readString(bundle, "keyboard_mode", "retui_mode", "mode")?.let { modeLabel = it.uppercase().take(14) }
-        readBoolean(bundle, null, "keyboard_symbols", "symbols")?.let { symbols = it }
-
-        if (persist) saveTheme()
     }
 
     private fun loadPersistedTheme() {
-        theme = ThemeState(
-            bg = prefs.getInt("theme.bg", theme.bg),
-            text = prefs.getInt("theme.text", theme.text),
-            border = prefs.getInt("theme.border", theme.border),
-            panelBg = prefs.getInt("theme.panelBg", theme.panelBg),
-            headerBg = prefs.getInt("theme.headerBg", theme.headerBg),
-            headerTabBorder = prefs.getInt("theme.headerTabBorder", theme.headerTabBorder),
-            headerText = prefs.getInt("theme.headerText", theme.headerText),
-            keyBg = prefs.getInt("theme.keyBg", theme.keyBg),
-            keyText = prefs.getInt("theme.keyText", theme.keyText),
-            outputBg = prefs.getInt("theme.outputBg", theme.outputBg),
-            outputBorder = prefs.getInt("theme.outputBorder", theme.outputBorder),
-            fontSizeSp = prefs.getInt("theme.fontSizeSp", theme.fontSizeSp),
-            dashedBorders = prefs.getBoolean("theme.dashedBorders", theme.dashedBorders),
-            dashLengthDp = prefs.getInt("theme.dashLengthDp", theme.dashLengthDp),
-            dashGapDp = prefs.getInt("theme.dashGapDp", theme.dashGapDp),
-            dashedStrokeWidthDp = prefs.getFloat("theme.dashedStrokeWidthDp", theme.dashedStrokeWidthDp),
-            moduleCornerRadiusDp = prefs.getInt("theme.moduleCornerRadiusDp", theme.moduleCornerRadiusDp),
-            outputCornerRadiusDp = prefs.getInt("theme.outputCornerRadiusDp", theme.outputCornerRadiusDp),
-            headerCornerRadiusDp = prefs.getInt("theme.headerCornerRadiusDp", theme.headerCornerRadiusDp),
-            moduleBodyTextSizeSp = prefs.getInt("theme.moduleBodyTextSizeSp", theme.moduleBodyTextSizeSp),
-            outputHeaderTextSizeSp = prefs.getInt("theme.outputHeaderTextSizeSp", theme.outputHeaderTextSizeSp),
-            cyberdeckMode = prefs.getBoolean("theme.cyberdeckMode", theme.cyberdeckMode),
-            crtFilter = prefs.getBoolean("theme.crtFilter", theme.crtFilter)
+        val prefix = when {
+            hasKeyboardThemeOverride() -> THEME_OVERRIDE_PREFIX
+            prefs.getBoolean(KeyboardPrefs.KEY_THEME_LAUNCHER_AVAILABLE, false) -> KeyboardPrefs.KEY_THEME_LAUNCHER_PREFIX
+            else -> null
+        }
+        theme = readThemeSnapshot(prefix, ThemeState())
+    }
+
+    private fun hasKeyboardThemeOverride(): Boolean {
+        return prefs.getBoolean(KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN, false)
+    }
+
+    private fun readThemeSnapshot(prefix: String?, fallback: ThemeState): ThemeState {
+        if (prefix == null) return fallback
+        return fallback.copy(
+            bg = prefs.getInt(prefix + "bg", fallback.bg),
+            text = prefs.getInt(prefix + "text", fallback.text),
+            border = prefs.getInt(prefix + "border", fallback.border),
+            panelBg = prefs.getInt(prefix + "panelBg", fallback.panelBg),
+            headerBg = prefs.getInt(prefix + "headerBg", fallback.headerBg),
+            headerTabBorder = prefs.getInt(prefix + "headerTabBorder", fallback.headerTabBorder),
+            headerText = prefs.getInt(prefix + "headerText", fallback.headerText),
+            keyBg = prefs.getInt(prefix + "keyBg", fallback.keyBg),
+            keyText = prefs.getInt(prefix + "keyText", fallback.keyText),
+            outputBg = prefs.getInt(prefix + "outputBg", fallback.outputBg),
+            outputBorder = prefs.getInt(prefix + "outputBorder", fallback.outputBorder),
+            fontSizeSp = prefs.getInt(prefix + "fontSizeSp", fallback.fontSizeSp),
+            dashedBorders = prefs.getBoolean(prefix + "dashedBorders", fallback.dashedBorders),
+            dashLengthDp = prefs.getInt(prefix + "dashLengthDp", fallback.dashLengthDp),
+            dashGapDp = prefs.getInt(prefix + "dashGapDp", fallback.dashGapDp),
+            dashedStrokeWidthDp = prefs.getFloat(prefix + "dashedStrokeWidthDp", fallback.dashedStrokeWidthDp),
+            moduleCornerRadiusDp = prefs.getInt(prefix + "moduleCornerRadiusDp", fallback.moduleCornerRadiusDp),
+            outputCornerRadiusDp = prefs.getInt(prefix + "outputCornerRadiusDp", fallback.outputCornerRadiusDp),
+            headerCornerRadiusDp = prefs.getInt(prefix + "headerCornerRadiusDp", fallback.headerCornerRadiusDp),
+            moduleBodyTextSizeSp = prefs.getInt(prefix + "moduleBodyTextSizeSp", fallback.moduleBodyTextSizeSp),
+            outputHeaderTextSizeSp = prefs.getInt(prefix + "outputHeaderTextSizeSp", fallback.outputHeaderTextSizeSp),
+            cyberdeckMode = prefs.getBoolean(prefix + "cyberdeckMode", fallback.cyberdeckMode),
+            crtFilter = prefs.getBoolean(prefix + "crtFilter", fallback.crtFilter)
         )
     }
 
-    private fun saveTheme() {
+    private fun saveThemeSnapshot(next: ThemeState, prefix: String) {
         prefs.edit()
-            .putInt("theme.bg", theme.bg)
-            .putInt("theme.text", theme.text)
-            .putInt("theme.border", theme.border)
-            .putInt("theme.panelBg", theme.panelBg)
-            .putInt("theme.headerBg", theme.headerBg)
-            .putInt("theme.headerTabBorder", theme.headerTabBorder)
-            .putInt("theme.headerText", theme.headerText)
-            .putInt("theme.keyBg", theme.keyBg)
-            .putInt("theme.keyText", theme.keyText)
-            .putInt("theme.outputBg", theme.outputBg)
-            .putInt("theme.outputBorder", theme.outputBorder)
-            .putInt("theme.fontSizeSp", theme.fontSizeSp)
-            .putBoolean("theme.dashedBorders", theme.dashedBorders)
-            .putInt("theme.dashLengthDp", theme.dashLengthDp)
-            .putInt("theme.dashGapDp", theme.dashGapDp)
-            .putFloat("theme.dashedStrokeWidthDp", theme.dashedStrokeWidthDp)
-            .putInt("theme.moduleCornerRadiusDp", theme.moduleCornerRadiusDp)
-            .putInt("theme.outputCornerRadiusDp", theme.outputCornerRadiusDp)
-            .putInt("theme.headerCornerRadiusDp", theme.headerCornerRadiusDp)
-            .putInt("theme.moduleBodyTextSizeSp", theme.moduleBodyTextSizeSp)
-            .putInt("theme.outputHeaderTextSizeSp", theme.outputHeaderTextSizeSp)
-            .putBoolean("theme.cyberdeckMode", theme.cyberdeckMode)
-            .putBoolean("theme.crtFilter", theme.crtFilter)
+            .putInt(prefix + "bg", next.bg)
+            .putInt(prefix + "text", next.text)
+            .putInt(prefix + "border", next.border)
+            .putInt(prefix + "panelBg", next.panelBg)
+            .putInt(prefix + "headerBg", next.headerBg)
+            .putInt(prefix + "headerTabBorder", next.headerTabBorder)
+            .putInt(prefix + "headerText", next.headerText)
+            .putInt(prefix + "keyBg", next.keyBg)
+            .putInt(prefix + "keyText", next.keyText)
+            .putInt(prefix + "outputBg", next.outputBg)
+            .putInt(prefix + "outputBorder", next.outputBorder)
+            .putInt(prefix + "fontSizeSp", next.fontSizeSp)
+            .putBoolean(prefix + "dashedBorders", next.dashedBorders)
+            .putInt(prefix + "dashLengthDp", next.dashLengthDp)
+            .putInt(prefix + "dashGapDp", next.dashGapDp)
+            .putFloat(prefix + "dashedStrokeWidthDp", next.dashedStrokeWidthDp)
+            .putInt(prefix + "moduleCornerRadiusDp", next.moduleCornerRadiusDp)
+            .putInt(prefix + "outputCornerRadiusDp", next.outputCornerRadiusDp)
+            .putInt(prefix + "headerCornerRadiusDp", next.headerCornerRadiusDp)
+            .putInt(prefix + "moduleBodyTextSizeSp", next.moduleBodyTextSizeSp)
+            .putInt(prefix + "outputHeaderTextSizeSp", next.outputHeaderTextSizeSp)
+            .putBoolean(prefix + "cyberdeckMode", next.cyberdeckMode)
+            .putBoolean(prefix + "crtFilter", next.crtFilter)
+            .putBoolean(KeyboardPrefs.KEY_THEME_LAUNCHER_AVAILABLE, true)
+            .putLong(KeyboardPrefs.KEY_THEME_LAUNCHER_UPDATED_AT, System.currentTimeMillis())
             .apply()
+    }
+
+    private fun containsThemeValue(bundle: Bundle): Boolean {
+        return THEME_BUNDLE_KEYS.any { bundle.containsKey(it) }
     }
 
     private fun readColor(bundle: Bundle, fallback: Int, vararg keys: String): Int {
@@ -1498,6 +1540,11 @@ class RetuiKeyboardService : InputMethodService() {
         SPACER
     }
 
+    private enum class ThemeSource {
+        LAUNCHER,
+        PREVIEW
+    }
+
     private class CyberPanelDrawable(
         private val fillColor: Int,
         private val borderColor: Int,
@@ -1618,7 +1665,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private class KeyboardBackgroundDrawable(
-        @Suppress("UNUSED_PARAMETER") fillColor: Int,
+        fillColor: Int,
         private val bitmap: Bitmap,
         opacityPercent: Int
     ) : Drawable() {
@@ -1628,7 +1675,7 @@ class RetuiKeyboardService : InputMethodService() {
 
         init {
             fillPaint.style = Paint.Style.FILL
-            fillPaint.color = Color.TRANSPARENT
+            fillPaint.color = fillColor
             imagePaint.alpha = (opacityPercent.coerceIn(0, 100) * 255 / 100f).roundToInt()
         }
 
@@ -1775,6 +1822,7 @@ class RetuiKeyboardService : InputMethodService() {
         const val ACTION_APPLY_THEME = "com.dvil.retui.keyboard.APPLY_THEME"
         const val ACTION_REFRESH_SETTINGS = "com.dvil.retui.keyboard.REFRESH_SETTINGS"
         const val PRIVATE_OPTIONS_PREFIX = "com.dvil.retui.keyboard"
+        private const val THEME_OVERRIDE_PREFIX = "theme."
         private const val REPEAT_INITIAL_DELAY_MS = 260L
         private const val REPEAT_INTERVAL_MS = 42L
         private const val SHIFT_DOUBLE_TAP_MS = 360L
@@ -1796,5 +1844,82 @@ class RetuiKeyboardService : InputMethodService() {
         private const val ICON_SHIFT = "⇧"
         private const val ICON_TAB = "TAB"
         private const val ICON_UP = "↑"
+        private val THEME_BUNDLE_KEYS = arrayOf(
+            "theme_bg",
+            "background_color",
+            "theme_background_color",
+            "theme_text",
+            "output_text_color",
+            "theme_text_color",
+            "theme_border",
+            "terminal_border_color",
+            "module_border_color",
+            "terminal_bg",
+            "terminal_window_background_color",
+            "module_bg_color",
+            "terminal_header_background_color",
+            "terminal_header_tab_background_color",
+            "module_header_bg_color",
+            "terminal_header_border_color",
+            "terminal_header_tab_border_color",
+            "header_tab_border_color",
+            "module_text_color",
+            "module_header_text_color",
+            "terminal_header_text_color",
+            "notification_widget_text_color",
+            "module_button_background_color",
+            "module_button_bg_color",
+            "input_bg_color",
+            "input_background_color",
+            "module_button_text_color",
+            "input_text_color",
+            "input_text",
+            "output_bg_color",
+            "output_background_color",
+            "output_bg",
+            "output_border_color",
+            "input_font_size",
+            "keyboard_font_size",
+            "enable_dashed_border",
+            "dashed_borders",
+            "dashed_border",
+            "terminal_dashed_borders",
+            "dashed_border_dash_length",
+            "dash_length",
+            "terminal_dash_length",
+            "dashed_border_gap_length",
+            "dash_gap",
+            "terminal_dash_gap",
+            "dashed_border_stroke_width",
+            "dashed_border_stroke_width_dp",
+            "dash_stroke_width",
+            "module_corner_radius",
+            "module_corner_radius_dp",
+            "corner_radius",
+            "corner_radius_dp",
+            "output_corner_radius",
+            "output_corner_radius_dp",
+            "terminal_corner_radius",
+            "header_corner_radius",
+            "header_corner_radius_dp",
+            "terminal_header_corner_radius",
+            "module_body_text_size",
+            "module_body_text_size_sp",
+            "module_output_text_size",
+            "output_font_size",
+            "output_header_text_size",
+            "output_header_text_size_sp",
+            "module_header_text_size",
+            "module_header_text_size_sp",
+            "header_font_size",
+            "enable_cyberdeck_mode",
+            "cyberdeck_mode",
+            "cyberdeck",
+            "enable_cyberdeck",
+            "enable_crt_filter",
+            "crt_filter",
+            "crt",
+            "enable_crt"
+        )
     }
 }

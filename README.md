@@ -9,7 +9,7 @@ storage with manual backup and restore.
 
 ## Current Status
 
-- Version: `0.1.2`
+- Version: `0.1.3`
 - Package: `com.dvil.retui.keyboard`
 - Minimum Android version: API 26
 - Target Android version: API 36

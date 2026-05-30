@@ -23,6 +23,7 @@ object KeyboardProfileBackup {
         KeyboardPrefs.KEY_SHOW_NUMBER_ROW,
         KeyboardPrefs.KEY_SOUND_ON_KEYPRESS,
         KeyboardPrefs.KEY_STROKE_WIDTH_DP,
+        KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN,
         KeyboardPrefs.KEY_VIBRATE_ON_KEYPRESS,
         "theme.bg",
         "theme.text",
@@ -68,7 +69,11 @@ object KeyboardProfileBackup {
 
         val editor = prefs.edit()
         profileKeys.forEach { editor.remove(it) }
-        val preferenceCount = importPreferences(root.optJSONObject("preferences"), editor)
+        val rawPreferences = root.optJSONObject("preferences")
+        val preferenceCount = importPreferences(rawPreferences, editor)
+        if (rawPreferences != null && !rawPreferences.has(KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN) && containsLegacyThemeOverride(rawPreferences)) {
+            editor.putBoolean(KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN, true)
+        }
         editor.apply()
 
         val dictionary = root.opt("dictionary")
@@ -124,6 +129,13 @@ object KeyboardProfileBackup {
             count++
         }
         return count
+    }
+
+    private fun containsLegacyThemeOverride(raw: JSONObject): Boolean {
+        raw.keys().forEach { key ->
+            if (key.startsWith("theme.") && key != KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN) return true
+        }
+        return false
     }
 }
 

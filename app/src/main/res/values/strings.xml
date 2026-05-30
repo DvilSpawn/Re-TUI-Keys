@@ -31,6 +31,9 @@
     <string name="setting_background_selected">Background image selected</string>
     <string name="setting_pick_background">Pick background image</string>
     <string name="setting_clear_background">Clear background image</string>
+    <string name="setting_sync_launcher_colors">Sync with Re:TUI launcher</string>
+    <string name="setting_save_keyboard_colors">Save keyboard colors</string>
+    <string name="setting_clear_keyboard_colors">Clear keyboard color override</string>
     <string name="setting_input_methods">Input method settings</string>
     <string name="setting_preview_hint">$ preview</string>
     <string name="setting_reset_layout">Reset layout</string>

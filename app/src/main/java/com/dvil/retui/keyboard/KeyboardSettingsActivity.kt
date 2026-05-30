@@ -33,6 +33,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import java.io.OutputStreamWriter
@@ -48,6 +49,7 @@ class KeyboardSettingsActivity : Activity() {
     private lateinit var previewDock: LinearLayout
     private lateinit var previewInput: EditText
     private var theme = SettingsTheme()
+    private var themeDraft = SettingsTheme()
     private var topInsetPx = 0
     private var bottomInsetPx = 0
     private var imeInsetPx = 0
@@ -58,6 +60,7 @@ class KeyboardSettingsActivity : Activity() {
         prefs = getSharedPreferences(KeyboardPrefs.PREFS_NAME, MODE_PRIVATE)
         KeyboardPrefs.migrateLayout(prefs)
         theme = loadSettingsTheme(intent)
+        themeDraft = theme
         configureWindow()
         setContentView(settingsView())
         showPreviewKeyboard()
@@ -67,6 +70,7 @@ class KeyboardSettingsActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         theme = loadSettingsTheme(intent)
+        themeDraft = theme
         configureWindow()
         setContentView(settingsView())
         showPreviewKeyboard()
@@ -357,6 +361,7 @@ class KeyboardSettingsActivity : Activity() {
         addDictionaryControls(list)
 
         addSectionLabel(list, "THEME")
+        addThemeColorControls(list)
 
         val imageLabel = terminalLabel("BACKGROUND: ${backgroundLabel()}", 12f, bold = true)
         imageLabel.setTextColor(theme.accent)
@@ -576,6 +581,216 @@ class KeyboardSettingsActivity : Activity() {
         controlRow.addView(bar, barParams)
         controlRow.addView(plus, LinearLayout.LayoutParams(dp(38), dp(36)))
         row.addView(controlRow, LinearLayout.LayoutParams(-1, dp(40)))
+    }
+
+    private fun addThemeColorControls(parent: LinearLayout) {
+        val source = when {
+            prefs.getBoolean(KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN, false) -> "COLOR SOURCE: KEYBOARD OVERRIDE"
+            prefs.getBoolean(KeyboardPrefs.KEY_THEME_LAUNCHER_AVAILABLE, false) -> "COLOR SOURCE: RETUI LAUNCHER"
+            else -> "COLOR SOURCE: KEYBOARD DEFAULT"
+        }
+        val sourceLabel = terminalLabel(source, 12f, bold = true)
+        sourceLabel.setTextColor(theme.accent)
+        val sourceParams = LinearLayout.LayoutParams(-1, dp(28))
+        sourceParams.setMargins(0, dp(2), 0, dp(4))
+        parent.addView(sourceLabel, sourceParams)
+
+        addCommandButton(parent, getString(R.string.setting_sync_launcher_colors)) {
+            syncColorsFromLauncher()
+        }
+        addCommandButton(parent, getString(R.string.setting_clear_keyboard_colors)) {
+            clearColorOverride()
+        }
+
+        colorBindings().forEach { binding ->
+            addThemeColorControl(parent, binding)
+        }
+
+        addCommandButton(parent, getString(R.string.setting_save_keyboard_colors)) {
+            saveColorOverride(themeDraft)
+        }
+    }
+
+    private fun addThemeColorControl(parent: LinearLayout, binding: ColorBinding) {
+        var value = binding.get(themeDraft)
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.VERTICAL
+        row.setPadding(dp(8), dp(7), dp(8), dp(7))
+        row.background = panelDrawable(
+            fill = theme.rowBg,
+            stroke = withAlpha(theme.border, 170),
+            strokeDp = 1f,
+            radiusDp = theme.moduleCornerRadiusDp,
+            notch = false
+        )
+        val rowParams = LinearLayout.LayoutParams(-1, -2)
+        rowParams.setMargins(0, 0, 0, dp(7))
+        parent.addView(row, rowParams)
+
+        val title = terminalLabel(
+            binding.label.uppercase(Locale.US),
+            max(10f, theme.moduleBodyTextSizeSp.toFloat() - 2f),
+            bold = true
+        )
+        row.addView(title, LinearLayout.LayoutParams(-1, dp(24)))
+
+        val description = terminalLabel(binding.summary, max(9f, theme.moduleBodyTextSizeSp.toFloat() - 4f), bold = false)
+        description.setTextColor(theme.dim)
+        description.maxLines = 2
+        row.addView(description, LinearLayout.LayoutParams(-1, -2))
+
+        val valueRow = LinearLayout(this)
+        valueRow.orientation = LinearLayout.HORIZONTAL
+        valueRow.gravity = Gravity.CENTER_VERTICAL
+        val valueRowParams = LinearLayout.LayoutParams(-1, dp(42))
+        valueRowParams.setMargins(0, dp(8), 0, dp(2))
+        row.addView(valueRow, valueRowParams)
+
+        val swatch = View(this)
+        valueRow.addView(swatch, LinearLayout.LayoutParams(dp(48), dp(34)))
+
+        val hexInput = terminalHexInput(value)
+        val hexParams = LinearLayout.LayoutParams(0, dp(34), 1f)
+        hexParams.leftMargin = dp(8)
+        valueRow.addView(hexInput, hexParams)
+
+        val channelViews = LinkedHashMap<Char, Pair<SeekBar, TextView>>()
+
+        fun updateChannelViews() {
+            channelViews.forEach { (channel, pair) ->
+                val channelValue = colorChannel(value, channel)
+                val slider = pair.first
+                val label = pair.second
+                if (slider.progress != channelValue) slider.progress = channelValue
+                label.text = "$channel ${channelValue.toString().padStart(3, '0')}"
+            }
+        }
+
+        fun render(next: Int, syncField: Boolean) {
+            value = next
+            themeDraft = binding.set(themeDraft, value)
+            swatch.background = ColorSwatchDrawable(value, theme.border)
+            if (syncField) {
+                val hex = colorHex(value)
+                if (hexInput.text.toString() != hex) {
+                    hexInput.setText(hex)
+                    hexInput.setSelection(hexInput.text.length)
+                }
+            }
+            updateChannelViews()
+        }
+
+        fun persistManualHex() {
+            val parsed = parseColorValue(hexInput.text.toString())
+            if (parsed == null) {
+                render(value, syncField = true)
+                toast("INVALID COLOR")
+            } else {
+                render(parsed, syncField = true)
+                hexInput.clearFocus()
+                previewInput.requestFocus()
+            }
+        }
+
+        listOf('A', 'R', 'G', 'B').forEach { channel ->
+            val channelRow = LinearLayout(this)
+            channelRow.orientation = LinearLayout.HORIZONTAL
+            channelRow.gravity = Gravity.CENTER_VERTICAL
+            val channelLabel = terminalLabel("$channel 000", 10f, bold = true)
+            channelLabel.setTextColor(theme.dim)
+            channelRow.addView(channelLabel, LinearLayout.LayoutParams(dp(54), dp(34)))
+
+            val slider = SeekBar(this)
+            slider.max = 255
+            slider.progress = colorChannel(value, channel)
+            slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) render(replaceColorChannel(value, channel, progress), syncField = true)
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+            channelRow.addView(slider, LinearLayout.LayoutParams(0, dp(34), 1f))
+            channelViews[channel] = slider to channelLabel
+            row.addView(channelRow, LinearLayout.LayoutParams(-1, dp(34)))
+        }
+
+        hexInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                persistManualHex()
+                true
+            } else {
+                false
+            }
+        }
+        hexInput.setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus) persistManualHex()
+        }
+
+        render(value, syncField = true)
+    }
+
+    private fun terminalHexInput(value: Int): EditText {
+        val input = EditText(this)
+        input.typeface = Typeface.MONOSPACE
+        input.setSingleLine(true)
+        input.setSelectAllOnFocus(true)
+        input.gravity = Gravity.CENTER_VERTICAL
+        input.inputType = InputType.TYPE_CLASS_TEXT or
+            InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
+            InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+        input.imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_FULLSCREEN
+        input.setTextColor(theme.text)
+        input.setHintTextColor(withAlpha(theme.dim, 150))
+        input.textSize = max(10f, theme.moduleBodyTextSizeSp.toFloat() - 1f)
+        input.setPadding(dp(10), 0, dp(10), 0)
+        input.background = panelDrawable(
+            fill = theme.inputBg,
+            stroke = withAlpha(theme.inputBorder, 160),
+            strokeDp = 1f,
+            radiusDp = theme.moduleCornerRadiusDp,
+            notch = false
+        )
+        input.setText(colorHex(value))
+        return input
+    }
+
+    private fun syncColorsFromLauncher() {
+        if (!prefs.getBoolean(KeyboardPrefs.KEY_THEME_LAUNCHER_AVAILABLE, false)) {
+            toast("OPEN RETUI LAUNCHER FIRST")
+            return
+        }
+        val launcherTheme = deriveSettingsTheme(readSettingsThemeSnapshot(KeyboardPrefs.KEY_THEME_LAUNCHER_PREFIX, SettingsTheme.DEFAULT))
+        saveSettingsTheme(launcherTheme, overrideColors = true)
+        theme = launcherTheme
+        themeDraft = launcherTheme
+        toast("SYNCED LAUNCHER COLORS")
+        configureWindow()
+        rebuildRows()
+        refreshKeyboard()
+    }
+
+    private fun saveColorOverride(next: SettingsTheme) {
+        val saved = deriveSettingsTheme(next)
+        saveSettingsTheme(saved, overrideColors = true)
+        theme = saved
+        themeDraft = saved
+        toast("KEYBOARD COLORS SAVED")
+        configureWindow()
+        rebuildRows()
+        refreshKeyboard()
+    }
+
+    private fun clearColorOverride() {
+        prefs.edit().putBoolean(KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN, false).apply()
+        theme = loadSettingsTheme(null)
+        themeDraft = theme
+        toast("KEYBOARD COLOR OVERRIDE CLEARED")
+        configureWindow()
+        rebuildRows()
+        refreshKeyboard()
     }
 
     private fun addDictionaryControls(parent: LinearLayout) {
@@ -996,6 +1211,7 @@ class KeyboardSettingsActivity : Activity() {
         }
         dictionaryEditorOpen = false
         theme = loadSettingsTheme(null)
+        themeDraft = theme
         toast("RESTORED ${result.wordCount} WORDS / ${result.preferenceCount} SETTINGS")
         rebuildRows()
         refreshKeyboard()
@@ -1275,56 +1491,30 @@ class KeyboardSettingsActivity : Activity() {
     }
 
     private fun loadSettingsTheme(intent: Intent?): SettingsTheme {
-        var next = SettingsTheme(
-            bg = prefs.getInt("theme.bg", SettingsTheme.DEFAULT.bg),
-            text = prefs.getInt("theme.text", SettingsTheme.DEFAULT.text),
-            border = prefs.getInt("theme.border", SettingsTheme.DEFAULT.border),
-            panelBg = prefs.getInt("theme.panelBg", SettingsTheme.DEFAULT.panelBg),
-            headerBg = prefs.getInt("theme.headerBg", SettingsTheme.DEFAULT.headerBg),
-            headerTabBorder = prefs.getInt("theme.headerTabBorder", SettingsTheme.DEFAULT.headerTabBorder),
-            headerText = prefs.getInt("theme.headerText", SettingsTheme.DEFAULT.headerText),
-            inputBg = prefs.getInt("theme.keyBg", SettingsTheme.DEFAULT.inputBg),
-            inputText = prefs.getInt("theme.keyText", SettingsTheme.DEFAULT.inputText),
-            outputBg = prefs.getInt("theme.outputBg", SettingsTheme.DEFAULT.outputBg),
-            outputBorder = prefs.getInt("theme.outputBorder", SettingsTheme.DEFAULT.outputBorder),
-            dashedBorders = prefs.getBoolean("theme.dashedBorders", SettingsTheme.DEFAULT.dashedBorders),
-            dashLengthDp = prefs.getInt("theme.dashLengthDp", SettingsTheme.DEFAULT.dashLengthDp),
-            dashGapDp = prefs.getInt("theme.dashGapDp", SettingsTheme.DEFAULT.dashGapDp),
-            dashedStrokeWidthDp = prefs.getFloat(
-                "theme.dashedStrokeWidthDp",
-                SettingsTheme.DEFAULT.dashedStrokeWidthDp
-            ),
-            moduleCornerRadiusDp = prefs.getInt(
-                "theme.moduleCornerRadiusDp",
-                SettingsTheme.DEFAULT.moduleCornerRadiusDp
-            ),
-            outputCornerRadiusDp = prefs.getInt(
-                "theme.outputCornerRadiusDp",
-                SettingsTheme.DEFAULT.outputCornerRadiusDp
-            ),
-            headerCornerRadiusDp = prefs.getInt(
-                "theme.headerCornerRadiusDp",
-                SettingsTheme.DEFAULT.headerCornerRadiusDp
-            ),
-            moduleBodyTextSizeSp = prefs.getInt(
-                "theme.moduleBodyTextSizeSp",
-                SettingsTheme.DEFAULT.moduleBodyTextSizeSp
-            ),
-            outputHeaderTextSizeSp = prefs.getInt(
-                "theme.outputHeaderTextSizeSp",
-                SettingsTheme.DEFAULT.outputHeaderTextSizeSp
-            ),
-            cyberdeckMode = prefs.getBoolean("theme.cyberdeckMode", SettingsTheme.DEFAULT.cyberdeckMode),
-            crtFilter = prefs.getBoolean("theme.crtFilter", SettingsTheme.DEFAULT.crtFilter)
-        )
+        var next = activeSettingsTheme()
         intent?.extras?.let { extras ->
-            val themed = applyThemeBundle(next, extras)
-            if (themed != next) {
-                saveSettingsTheme(themed)
+            val launcherTheme = applyThemeBundle(
+                readSettingsThemeSnapshot(KeyboardPrefs.KEY_THEME_LAUNCHER_PREFIX, SettingsTheme.DEFAULT),
+                extras
+            )
+            if (launcherTheme != readSettingsThemeSnapshot(KeyboardPrefs.KEY_THEME_LAUNCHER_PREFIX, SettingsTheme.DEFAULT)) {
+                saveLauncherTheme(launcherTheme)
             }
-            next = themed
+            if (!prefs.getBoolean(KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN, false)) {
+                next = launcherTheme
+            }
         }
         return deriveSettingsTheme(next)
+    }
+
+    private fun activeSettingsTheme(): SettingsTheme {
+        return when {
+            prefs.getBoolean(KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN, false) ->
+                readSettingsThemeSnapshot(THEME_OVERRIDE_PREFIX, SettingsTheme.DEFAULT)
+            prefs.getBoolean(KeyboardPrefs.KEY_THEME_LAUNCHER_AVAILABLE, false) ->
+                readSettingsThemeSnapshot(KeyboardPrefs.KEY_THEME_LAUNCHER_PREFIX, SettingsTheme.DEFAULT)
+            else -> SettingsTheme.DEFAULT
+        }
     }
 
     private fun applyThemeBundle(base: SettingsTheme, bundle: Bundle): SettingsTheme {
@@ -1485,31 +1675,74 @@ class KeyboardSettingsActivity : Activity() {
         )
     }
 
-    private fun saveSettingsTheme(next: SettingsTheme) {
-        prefs.edit()
-            .putInt("theme.bg", next.bg)
-            .putInt("theme.text", next.text)
-            .putInt("theme.border", next.border)
-            .putInt("theme.panelBg", next.panelBg)
-            .putInt("theme.headerBg", next.headerBg)
-            .putInt("theme.headerTabBorder", next.headerTabBorder)
-            .putInt("theme.headerText", next.headerText)
-            .putInt("theme.keyBg", next.inputBg)
-            .putInt("theme.keyText", next.inputText)
-            .putInt("theme.outputBg", next.outputBg)
-            .putInt("theme.outputBorder", next.outputBorder)
-            .putBoolean("theme.dashedBorders", next.dashedBorders)
-            .putInt("theme.dashLengthDp", next.dashLengthDp)
-            .putInt("theme.dashGapDp", next.dashGapDp)
-            .putFloat("theme.dashedStrokeWidthDp", next.dashedStrokeWidthDp)
-            .putInt("theme.moduleCornerRadiusDp", next.moduleCornerRadiusDp)
-            .putInt("theme.outputCornerRadiusDp", next.outputCornerRadiusDp)
-            .putInt("theme.headerCornerRadiusDp", next.headerCornerRadiusDp)
-            .putInt("theme.moduleBodyTextSizeSp", next.moduleBodyTextSizeSp)
-            .putInt("theme.outputHeaderTextSizeSp", next.outputHeaderTextSizeSp)
-            .putBoolean("theme.cyberdeckMode", next.cyberdeckMode)
-            .putBoolean("theme.crtFilter", next.crtFilter)
-            .apply()
+    private fun readSettingsThemeSnapshot(prefix: String, fallback: SettingsTheme): SettingsTheme {
+        return fallback.copy(
+            bg = prefs.getInt(prefix + "bg", fallback.bg),
+            text = prefs.getInt(prefix + "text", fallback.text),
+            border = prefs.getInt(prefix + "border", fallback.border),
+            panelBg = prefs.getInt(prefix + "panelBg", fallback.panelBg),
+            headerBg = prefs.getInt(prefix + "headerBg", fallback.headerBg),
+            headerTabBorder = prefs.getInt(prefix + "headerTabBorder", fallback.headerTabBorder),
+            headerText = prefs.getInt(prefix + "headerText", fallback.headerText),
+            inputBg = prefs.getInt(prefix + "keyBg", fallback.inputBg),
+            inputText = prefs.getInt(prefix + "keyText", fallback.inputText),
+            outputBg = prefs.getInt(prefix + "outputBg", fallback.outputBg),
+            outputBorder = prefs.getInt(prefix + "outputBorder", fallback.outputBorder),
+            dashedBorders = prefs.getBoolean(prefix + "dashedBorders", fallback.dashedBorders),
+            dashLengthDp = prefs.getInt(prefix + "dashLengthDp", fallback.dashLengthDp),
+            dashGapDp = prefs.getInt(prefix + "dashGapDp", fallback.dashGapDp),
+            dashedStrokeWidthDp = prefs.getFloat(prefix + "dashedStrokeWidthDp", fallback.dashedStrokeWidthDp),
+            moduleCornerRadiusDp = prefs.getInt(prefix + "moduleCornerRadiusDp", fallback.moduleCornerRadiusDp),
+            outputCornerRadiusDp = prefs.getInt(prefix + "outputCornerRadiusDp", fallback.outputCornerRadiusDp),
+            headerCornerRadiusDp = prefs.getInt(prefix + "headerCornerRadiusDp", fallback.headerCornerRadiusDp),
+            moduleBodyTextSizeSp = prefs.getInt(prefix + "moduleBodyTextSizeSp", fallback.moduleBodyTextSizeSp),
+            outputHeaderTextSizeSp = prefs.getInt(prefix + "outputHeaderTextSizeSp", fallback.outputHeaderTextSizeSp),
+            cyberdeckMode = prefs.getBoolean(prefix + "cyberdeckMode", fallback.cyberdeckMode),
+            crtFilter = prefs.getBoolean(prefix + "crtFilter", fallback.crtFilter)
+        )
+    }
+
+    private fun saveSettingsTheme(next: SettingsTheme, overrideColors: Boolean) {
+        saveSettingsThemeSnapshot(next, THEME_OVERRIDE_PREFIX, overrideColors)
+    }
+
+    private fun saveLauncherTheme(next: SettingsTheme) {
+        saveSettingsThemeSnapshot(next, KeyboardPrefs.KEY_THEME_LAUNCHER_PREFIX, overrideColors = false)
+    }
+
+    private fun saveSettingsThemeSnapshot(next: SettingsTheme, prefix: String, overrideColors: Boolean) {
+        val editor = prefs.edit()
+            .putInt(prefix + "bg", next.bg)
+            .putInt(prefix + "text", next.text)
+            .putInt(prefix + "border", next.border)
+            .putInt(prefix + "panelBg", next.panelBg)
+            .putInt(prefix + "headerBg", next.headerBg)
+            .putInt(prefix + "headerTabBorder", next.headerTabBorder)
+            .putInt(prefix + "headerText", next.headerText)
+            .putInt(prefix + "keyBg", next.inputBg)
+            .putInt(prefix + "keyText", next.inputText)
+            .putInt(prefix + "outputBg", next.outputBg)
+            .putInt(prefix + "outputBorder", next.outputBorder)
+            .putBoolean(prefix + "dashedBorders", next.dashedBorders)
+            .putInt(prefix + "dashLengthDp", next.dashLengthDp)
+            .putInt(prefix + "dashGapDp", next.dashGapDp)
+            .putFloat(prefix + "dashedStrokeWidthDp", next.dashedStrokeWidthDp)
+            .putInt(prefix + "moduleCornerRadiusDp", next.moduleCornerRadiusDp)
+            .putInt(prefix + "outputCornerRadiusDp", next.outputCornerRadiusDp)
+            .putInt(prefix + "headerCornerRadiusDp", next.headerCornerRadiusDp)
+            .putInt(prefix + "moduleBodyTextSizeSp", next.moduleBodyTextSizeSp)
+            .putInt(prefix + "outputHeaderTextSizeSp", next.outputHeaderTextSizeSp)
+            .putBoolean(prefix + "cyberdeckMode", next.cyberdeckMode)
+            .putBoolean(prefix + "crtFilter", next.crtFilter)
+        if (overrideColors) {
+            editor.putBoolean(KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN, true)
+        }
+        if (prefix == KeyboardPrefs.KEY_THEME_LAUNCHER_PREFIX) {
+            editor
+                .putBoolean(KeyboardPrefs.KEY_THEME_LAUNCHER_AVAILABLE, true)
+                .putLong(KeyboardPrefs.KEY_THEME_LAUNCHER_UPDATED_AT, System.currentTimeMillis())
+        }
+        editor.apply()
     }
 
     private fun readColor(bundle: Bundle, fallback: Int, vararg keys: String): Int {
@@ -1585,6 +1818,107 @@ class KeyboardSettingsActivity : Activity() {
         return size.coerceIn(8, 32)
     }
 
+    private fun colorBindings(): List<ColorBinding> {
+        return listOf(
+            ColorBinding(
+                label = "Keyboard background",
+                summary = "theme.xml: background_color / theme_bg",
+                get = { it.bg },
+                set = { state, color -> state.copy(bg = color) }
+            ),
+            ColorBinding(
+                label = "Primary text",
+                summary = "theme.xml: output_text_color / theme_text",
+                get = { it.text },
+                set = { state, color -> state.copy(text = color) }
+            ),
+            ColorBinding(
+                label = "Shared border",
+                summary = "theme.xml: terminal_border_color",
+                get = { it.border },
+                set = { state, color -> state.copy(border = color) }
+            ),
+            ColorBinding(
+                label = "Panel background",
+                summary = "theme.xml: terminal_window_background_color",
+                get = { it.panelBg },
+                set = { state, color -> state.copy(panelBg = color) }
+            ),
+            ColorBinding(
+                label = "Header background",
+                summary = "theme.xml: terminal_header_background_color",
+                get = { it.headerBg },
+                set = { state, color -> state.copy(headerBg = color) }
+            ),
+            ColorBinding(
+                label = "Header border",
+                summary = "theme.xml: terminal_header_border_color",
+                get = { it.headerTabBorder },
+                set = { state, color -> state.copy(headerTabBorder = color) }
+            ),
+            ColorBinding(
+                label = "Header text",
+                summary = "theme.xml: module_text_color / module_header_text_color",
+                get = { it.headerText },
+                set = { state, color -> state.copy(headerText = color) }
+            ),
+            ColorBinding(
+                label = "Key background",
+                summary = "theme.xml: module_button_background_color",
+                get = { it.inputBg },
+                set = { state, color -> state.copy(inputBg = color) }
+            ),
+            ColorBinding(
+                label = "Key text",
+                summary = "theme.xml: module_button_text_color",
+                get = { it.inputText },
+                set = { state, color -> state.copy(inputText = color) }
+            ),
+            ColorBinding(
+                label = "Output background",
+                summary = "theme.xml: output_background_color",
+                get = { it.outputBg },
+                set = { state, color -> state.copy(outputBg = color) }
+            ),
+            ColorBinding(
+                label = "Output border",
+                summary = "theme.xml: output_border_color",
+                get = { it.outputBorder },
+                set = { state, color -> state.copy(outputBorder = color) }
+            )
+        )
+    }
+
+    private fun colorChannel(color: Int, channel: Char): Int {
+        return when (channel) {
+            'A' -> Color.alpha(color)
+            'R' -> Color.red(color)
+            'G' -> Color.green(color)
+            else -> Color.blue(color)
+        }
+    }
+
+    private fun replaceColorChannel(color: Int, channel: Char, value: Int): Int {
+        val clamped = value.coerceIn(0, 255)
+        return Color.argb(
+            if (channel == 'A') clamped else Color.alpha(color),
+            if (channel == 'R') clamped else Color.red(color),
+            if (channel == 'G') clamped else Color.green(color),
+            if (channel == 'B') clamped else Color.blue(color)
+        )
+    }
+
+    private fun colorHex(color: Int): String {
+        return String.format(Locale.US, "#%08X", color)
+    }
+
+    private data class ColorBinding(
+        val label: String,
+        val summary: String,
+        val get: (SettingsTheme) -> Int,
+        val set: (SettingsTheme, Int) -> SettingsTheme
+    )
+
     private data class SettingsTheme(
         val bg: Int = Color.rgb(2, 6, 4),
         val text: Int = Color.rgb(187, 225, 136),
@@ -1617,6 +1951,62 @@ class KeyboardSettingsActivity : Activity() {
         companion object {
             val DEFAULT = SettingsTheme()
         }
+    }
+
+    private class ColorSwatchDrawable(
+        private val color: Int,
+        private val borderColor: Int
+    ) : Drawable() {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        override fun draw(canvas: Canvas) {
+            val bounds = bounds
+            if (bounds.isEmpty) return
+            val cell = max(6, bounds.height() / 3)
+            var y = bounds.top
+            var row = 0
+            while (y < bounds.bottom) {
+                var x = bounds.left
+                var column = 0
+                while (x < bounds.right) {
+                    paint.style = Paint.Style.FILL
+                    paint.color = if ((row + column) % 2 == 0) Color.rgb(54, 62, 58) else Color.rgb(12, 16, 14)
+                    canvas.drawRect(
+                        x.toFloat(),
+                        y.toFloat(),
+                        min(x + cell, bounds.right).toFloat(),
+                        min(y + cell, bounds.bottom).toFloat(),
+                        paint
+                    )
+                    x += cell
+                    column++
+                }
+                y += cell
+                row++
+            }
+
+            paint.style = Paint.Style.FILL
+            paint.color = color
+            canvas.drawRect(bounds, paint)
+
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 2f
+            paint.color = borderColor
+            canvas.drawRect(bounds, paint)
+        }
+
+        override fun setAlpha(alpha: Int) {
+            paint.alpha = alpha
+            invalidateSelf()
+        }
+
+        override fun setColorFilter(colorFilter: ColorFilter?) {
+            paint.colorFilter = colorFilter
+            invalidateSelf()
+        }
+
+        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     }
 
     private class KeyboardTerminalBorderDrawable(
@@ -1925,6 +2315,7 @@ class KeyboardSettingsActivity : Activity() {
         private const val REQUEST_PROFILE_BACKUP = 42
         private const val REQUEST_PROFILE_RESTORE = 43
         private const val BAR_SEGMENTS = 16
+        private const val THEME_OVERRIDE_PREFIX = "theme."
 
         private val SURFACE_BG = Color.rgb(2, 6, 4)
         private val PANEL_BG = Color.rgb(13, 23, 20)

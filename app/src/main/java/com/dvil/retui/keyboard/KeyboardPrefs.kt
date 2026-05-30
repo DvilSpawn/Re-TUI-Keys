@@ -20,6 +20,10 @@ object KeyboardPrefs {
     const val KEY_SHOW_NUMBER_ROW = "layout.showNumberRow"
     const val KEY_SOUND_ON_KEYPRESS = "layout.soundOnKeypress"
     const val KEY_STROKE_WIDTH_DP = "layout.strokeWidthDp"
+    const val KEY_THEME_COLORS_OVERRIDDEN = "theme.colorsOverridden"
+    const val KEY_THEME_LAUNCHER_AVAILABLE = "theme.launcher.available"
+    const val KEY_THEME_LAUNCHER_UPDATED_AT = "theme.launcher.updatedAt"
+    const val KEY_THEME_LAUNCHER_PREFIX = "theme.launcher."
     const val KEY_VIBRATE_ON_KEYPRESS = "layout.vibrateOnKeypress"
 
     const val DEFAULT_BACKGROUND_IMAGE_OPACITY = 55
@@ -82,20 +86,71 @@ object KeyboardPrefs {
     }
 
     fun migrateLayout(prefs: SharedPreferences) {
-        if (!prefs.contains(KEY_LEGACY_OUTER_MARGIN_DP)) return
-        val legacyMargin = prefs.getInt(KEY_LEGACY_OUTER_MARGIN_DP, DEFAULT_HORIZONTAL_MARGIN_DP)
         val editor = prefs.edit()
         var changed = false
-        if (!prefs.contains(KEY_BOTTOM_MARGIN_DP)) {
-            editor.putInt(KEY_BOTTOM_MARGIN_DP, legacyMargin)
+
+        if (prefs.contains(KEY_LEGACY_OUTER_MARGIN_DP)) {
+            val legacyMargin = prefs.getInt(KEY_LEGACY_OUTER_MARGIN_DP, DEFAULT_HORIZONTAL_MARGIN_DP)
+            if (!prefs.contains(KEY_BOTTOM_MARGIN_DP)) {
+                editor.putInt(KEY_BOTTOM_MARGIN_DP, legacyMargin)
+                changed = true
+            }
+            if (!prefs.contains(KEY_HORIZONTAL_MARGIN_DP)) {
+                editor.putInt(KEY_HORIZONTAL_MARGIN_DP, legacyMargin)
+                changed = true
+            }
+        }
+
+        if (
+            !prefs.getBoolean(KEY_THEME_COLORS_OVERRIDDEN, false) &&
+            !prefs.getBoolean(KEY_THEME_LAUNCHER_AVAILABLE, false) &&
+            THEME_SNAPSHOT_SUFFIXES.any { prefs.contains("theme.$it") }
+        ) {
+            THEME_SNAPSHOT_SUFFIXES.forEach { suffix ->
+                val oldKey = "theme.$suffix"
+                val value = prefs.all[oldKey] ?: return@forEach
+                val newKey = KEY_THEME_LAUNCHER_PREFIX + suffix
+                when (value) {
+                    is Boolean -> editor.putBoolean(newKey, value)
+                    is Int -> editor.putInt(newKey, value)
+                    is Float -> editor.putFloat(newKey, value)
+                    is String -> editor.putString(newKey, value)
+                }
+            }
+            editor
+                .putBoolean(KEY_THEME_LAUNCHER_AVAILABLE, true)
+                .putLong(KEY_THEME_LAUNCHER_UPDATED_AT, System.currentTimeMillis())
             changed = true
         }
-        if (!prefs.contains(KEY_HORIZONTAL_MARGIN_DP)) {
-            editor.putInt(KEY_HORIZONTAL_MARGIN_DP, legacyMargin)
-            changed = true
-        }
+
         if (changed) editor.apply()
     }
+
+    private val THEME_SNAPSHOT_SUFFIXES = arrayOf(
+        "bg",
+        "text",
+        "border",
+        "panelBg",
+        "headerBg",
+        "headerTabBorder",
+        "headerText",
+        "keyBg",
+        "keyText",
+        "outputBg",
+        "outputBorder",
+        "fontSizeSp",
+        "dashedBorders",
+        "dashLengthDp",
+        "dashGapDp",
+        "dashedStrokeWidthDp",
+        "moduleCornerRadiusDp",
+        "outputCornerRadiusDp",
+        "headerCornerRadiusDp",
+        "moduleBodyTextSizeSp",
+        "outputHeaderTextSizeSp",
+        "cyberdeckMode",
+        "crtFilter"
+    )
 }
 
 data class KeyboardLayoutSettings(
