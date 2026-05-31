@@ -479,7 +479,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun addSplitBottomRow(parent: LinearLayout, heightDp: Int) {
         val right = mutableListOf<KeySpec>()
         if (layout.quickPeriod) right.add(KeySpec(".", 0.9f, text = "."))
-        right.add(KeySpec(enterLabel(), 1.35f, Special.ENTER))
+        right.add(enterKey(1.35f))
         addSplitKeyRow(
             parent = parent,
             left = listOf(
@@ -603,14 +603,14 @@ class RetuiKeyboardService : InputMethodService() {
         if (layout.quickPeriod) {
             out.add(KeySpec(".", 0.75f, text = "."))
         }
-        out.add(KeySpec(enterLabel(), 1.45f, Special.ENTER))
+        out.add(enterKey(1.45f))
         return out
     }
 
     private fun portraitBottomRow(): List<KeySpec> {
         return listOf(
             KeySpec("SPACE", 5.2f, Special.SPACE),
-            KeySpec("ENTER", 1.8f, Special.ENTER)
+            enterKey(1.8f)
         )
     }
 
@@ -679,7 +679,7 @@ class RetuiKeyboardService : InputMethodService() {
                 commaKey(),
                 KeySpec("0", text = "0"),
                 KeySpec(".", text = "."),
-                KeySpec(enterLabel(), special = Special.ENTER)
+                enterKey()
             )
         )
         rows.forEachIndexed { index, row ->
@@ -708,6 +708,14 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun commaKey(weight: Float = 1f): KeySpec {
         return KeySpec(",", weight, text = ",", longLabel = ICON_SETTINGS, longSpecial = Special.SETTINGS)
+    }
+
+    private fun enterKey(weight: Float = 1f): KeySpec {
+        return if (enterUsesEditorAction()) {
+            KeySpec(enterLabel(), weight, Special.ENTER, longLabel = ICON_ENTER, longSpecial = Special.SHIFT_ENTER)
+        } else {
+            KeySpec(enterLabel(), weight, Special.ENTER)
+        }
     }
 
     private fun addKeyRow(parent: LinearLayout, keys: List<KeySpec>, heightDp: Int) {
@@ -912,7 +920,11 @@ class RetuiKeyboardService : InputMethodService() {
         preview.setTextColor(theme.keyText)
         preview.background = panel(brightenColor(theme.keyBg, 1.22f, 30), theme.border, 4)
         preview.elevation = dpFloat(8f)
-        preview.contentDescription = if (key.longSpecial == Special.SETTINGS) "Open settings" else "Insert $label"
+        preview.contentDescription = when (key.longSpecial) {
+            Special.SETTINGS -> "Open settings"
+            Special.SHIFT_ENTER -> "Send Shift+Enter"
+            else -> "Insert $label"
+        }
 
         val width = dp(48)
         val height = dp(44)
@@ -983,8 +995,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun enterLabel(): String {
-        val action = (currentInfo?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION
-        return when (action) {
+        return when (currentImeAction()) {
             EditorInfo.IME_ACTION_GO,
             EditorInfo.IME_ACTION_NEXT -> ICON_ENTER_GO
             EditorInfo.IME_ACTION_SEARCH -> ICON_SEARCH
@@ -992,6 +1003,15 @@ class RetuiKeyboardService : InputMethodService() {
             EditorInfo.IME_ACTION_DONE -> ICON_DONE
             else -> ICON_ENTER
         }
+    }
+
+    private fun enterUsesEditorAction(): Boolean {
+        val action = currentImeAction()
+        return action != EditorInfo.IME_ACTION_NONE && action != EditorInfo.IME_ACTION_UNSPECIFIED
+    }
+
+    private fun currentImeAction(): Int {
+        return (currentInfo?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION
     }
 
     private fun shiftLabel(): String {
@@ -1205,6 +1225,7 @@ class RetuiKeyboardService : InputMethodService() {
             Special.CTRL -> toggleModifier(Special.CTRL)
             Special.ALT -> toggleModifier(Special.ALT)
             Special.SUPER -> toggleModifier(Special.SUPER)
+            Special.SHIFT_ENTER -> sendShiftEnter()
             Special.SETTINGS -> openKeyboardSettings()
             Special.HIDE -> requestHideSelf(0)
             Special.SPACER, null -> {
@@ -1223,9 +1244,17 @@ class RetuiKeyboardService : InputMethodService() {
     private fun handleLongKey(key: KeySpec) {
         when {
             key.longSpecial == Special.SETTINGS -> openKeyboardSettings()
+            key.longSpecial == Special.SHIFT_ENTER -> sendShiftEnter()
             key.longKeyCode != null -> sendKeyCode(key.longKeyCode)
             key.longText != null -> commitFromKey(key.longText)
         }
+    }
+
+    private fun sendShiftEnter() {
+        sendKeyCode(
+            KeyEvent.KEYCODE_ENTER,
+            extraMetaState = KeyEvent.META_SHIFT_ON or KeyEvent.META_SHIFT_LEFT_ON
+        )
     }
 
     private fun openKeyboardSettings() {
@@ -1363,7 +1392,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun enter() {
         val ic = currentInputConnection ?: return
         learnFinishedWord(currentWordBeforeCursor())
-        val action = (currentInfo?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION
+        val action = currentImeAction()
         if (action != EditorInfo.IME_ACTION_NONE && action != EditorInfo.IME_ACTION_UNSPECIFIED) {
             ic.performEditorAction(action)
         } else {
@@ -1372,9 +1401,13 @@ class RetuiKeyboardService : InputMethodService() {
         refreshSuggestionStripSoon()
     }
 
-    private fun sendKeyCode(keyCode: Int, ic: InputConnection? = currentInputConnection) {
+    private fun sendKeyCode(
+        keyCode: Int,
+        ic: InputConnection? = currentInputConnection,
+        extraMetaState: Int = 0
+    ) {
         ic ?: return
-        val metaState = latchedMetaState()
+        val metaState = latchedMetaState() or extraMetaState
         val eventTime = SystemClock.uptimeMillis()
         ic.sendKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN, keyCode, 0, metaState))
         ic.sendKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP, keyCode, 0, metaState))
@@ -1928,6 +1961,7 @@ class RetuiKeyboardService : InputMethodService() {
         CTRL,
         ALT,
         SUPER,
+        SHIFT_ENTER,
         SETTINGS,
         HIDE,
         SPACER
