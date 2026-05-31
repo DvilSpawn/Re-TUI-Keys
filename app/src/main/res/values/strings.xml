@@ -5,6 +5,8 @@
     <string name="setting_bottom_margin">Bottom margin</string>
     <string name="setting_horizontal_margins">Left/right margins</string>
     <string name="setting_keyboard_height">Height</string>
+    <string name="setting_portrait_keyboard_height">Portrait height</string>
+    <string name="setting_landscape_keyboard_height">Landscape height</string>
     <string name="setting_key_gap">Key gap</string>
     <string name="setting_corner_radius">Rounded edges</string>
     <string name="setting_stroke_width">Stroke</string>

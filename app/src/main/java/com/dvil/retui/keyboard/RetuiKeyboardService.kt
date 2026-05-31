@@ -2,6 +2,7 @@ package com.dvil.retui.keyboard
 
 import android.content.SharedPreferences
 import android.content.res.Configuration
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -54,11 +55,12 @@ class RetuiKeyboardService : InputMethodService() {
         backgroundImageUri = null,
         bottomMarginDp = KeyboardPrefs.DEFAULT_BOTTOM_MARGIN_DP,
         cornerRadiusDp = KeyboardPrefs.DEFAULT_CORNER_RADIUS_DP,
-        heightPercent = KeyboardPrefs.DEFAULT_HEIGHT_PERCENT,
         horizontalMarginDp = KeyboardPrefs.DEFAULT_HORIZONTAL_MARGIN_DP,
         keyGapDp = KeyboardPrefs.DEFAULT_KEY_GAP_DP,
+        landscapeHeightPercent = KeyboardPrefs.DEFAULT_LANDSCAPE_HEIGHT_PERCENT,
         learnLocalWords = KeyboardPrefs.DEFAULT_LEARN_LOCAL_WORDS,
         localSuggestions = KeyboardPrefs.DEFAULT_LOCAL_SUGGESTIONS,
+        portraitHeightPercent = KeyboardPrefs.DEFAULT_PORTRAIT_HEIGHT_PERCENT,
         quickPeriod = KeyboardPrefs.DEFAULT_QUICK_PERIOD,
         showArrowRow = KeyboardPrefs.DEFAULT_SHOW_ARROW_ROW,
         showNumberRow = KeyboardPrefs.DEFAULT_SHOW_NUMBER_ROW,
@@ -482,7 +484,7 @@ class RetuiKeyboardService : InputMethodService() {
             parent = parent,
             left = listOf(
                 KeySpec(if (symbols) "ABC" else "123", 1.2f, Special.SYMBOLS),
-                KeySpec(",", 0.8f, text = ",")
+                commaKey(0.8f)
             ),
             center = listOf(KeySpec("SPACE", 1f, Special.SPACE)),
             right = right,
@@ -595,7 +597,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun bottomRow(): List<KeySpec> {
         val out = mutableListOf(
             KeySpec(if (symbols) "ABC" else "123", 1.2f, Special.SYMBOLS),
-            KeySpec(",", 0.75f, text = ","),
+            commaKey(0.75f),
             KeySpec("SPACE", if (layout.quickPeriod) 4.8f else 5.55f, Special.SPACE)
         )
         if (layout.quickPeriod) {
@@ -642,7 +644,7 @@ class RetuiKeyboardService : InputMethodService() {
         return listOf(
             listOf("/", "-", "_").map { KeySpec(it, text = it) },
             listOf("'", "\"", ":").map { KeySpec(it, text = it) },
-            listOf(",", ".", "?").map { KeySpec(it, text = it) },
+            listOf(commaKey(), KeySpec(".", text = "."), KeySpec("?", text = "?")),
             listOf(
                 KeySpec("ABC", 1f, Special.SYMBOLS),
                 KeySpec("@", 1f, text = "@"),
@@ -674,7 +676,7 @@ class RetuiKeyboardService : InputMethodService() {
                 KeySpec(ICON_BACKSPACE, special = Special.BACKSPACE)
             ),
             listOf(
-                KeySpec(",", text = ","),
+                commaKey(),
                 KeySpec("0", text = "0"),
                 KeySpec(".", text = "."),
                 KeySpec(enterLabel(), special = Special.ENTER)
@@ -702,6 +704,10 @@ class RetuiKeyboardService : InputMethodService() {
         }
         if (trailingSpacer > 0f) out.add(KeySpec("", trailingSpacer, Special.SPACER))
         return out
+    }
+
+    private fun commaKey(weight: Float = 1f): KeySpec {
+        return KeySpec(",", weight, text = ",", longLabel = ICON_SETTINGS, longSpecial = Special.SETTINGS)
     }
 
     private fun addKeyRow(parent: LinearLayout, keys: List<KeySpec>, heightDp: Int) {
@@ -767,7 +773,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun keyView(key: KeySpec): View {
-        if (key.longText == null && key.longKeyCode == null) {
+        if (key.longText == null && key.longKeyCode == null && key.longSpecial == null) {
             return actionKey(
                 key.label,
                 action = { handleKey(key) },
@@ -906,7 +912,7 @@ class RetuiKeyboardService : InputMethodService() {
         preview.setTextColor(theme.keyText)
         preview.background = panel(brightenColor(theme.keyBg, 1.22f, 30), theme.border, 4)
         preview.elevation = dpFloat(8f)
-        preview.contentDescription = "Insert $label"
+        preview.contentDescription = if (key.longSpecial == Special.SETTINGS) "Open settings" else "Insert $label"
 
         val width = dp(48)
         val height = dp(44)
@@ -1117,7 +1123,11 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun rowParams(heightDp: Int): LinearLayout.LayoutParams {
-        val heightPercent = if (isLandscape()) min(layout.heightPercent, LANDSCAPE_MAX_HEIGHT_PERCENT) else layout.heightPercent
+        val heightPercent = if (isLandscape()) {
+            layout.landscapeHeightPercent
+        } else {
+            layout.portraitHeightPercent
+        }
         val minHeight = if (isLandscape()) 24 else 28
         val scaledHeight = max(minHeight, (heightDp * heightPercent / 100f).roundToInt())
         val params = LinearLayout.LayoutParams(-1, dp(scaledHeight))
@@ -1195,6 +1205,7 @@ class RetuiKeyboardService : InputMethodService() {
             Special.CTRL -> toggleModifier(Special.CTRL)
             Special.ALT -> toggleModifier(Special.ALT)
             Special.SUPER -> toggleModifier(Special.SUPER)
+            Special.SETTINGS -> openKeyboardSettings()
             Special.HIDE -> requestHideSelf(0)
             Special.SPACER, null -> {
                 when {
@@ -1211,9 +1222,19 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun handleLongKey(key: KeySpec) {
         when {
+            key.longSpecial == Special.SETTINGS -> openKeyboardSettings()
             key.longKeyCode != null -> sendKeyCode(key.longKeyCode)
             key.longText != null -> commitFromKey(key.longText)
         }
+    }
+
+    private fun openKeyboardSettings() {
+        clearLatchedModifiers()
+        requestHideSelf(0)
+        val intent = Intent(this, KeyboardSettingsActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        startActivity(intent)
     }
 
     private fun toggleModifier(special: Special) {
@@ -1881,6 +1902,7 @@ class RetuiKeyboardService : InputMethodService() {
         val longLabel: String? = null,
         val longText: String? = null,
         val longKeyCode: Int? = null,
+        val longSpecial: Special? = null,
         val specialStyle: Boolean = false
     )
 
@@ -1906,6 +1928,7 @@ class RetuiKeyboardService : InputMethodService() {
         CTRL,
         ALT,
         SUPER,
+        SETTINGS,
         HIDE,
         SPACER
     }
@@ -2196,7 +2219,6 @@ class RetuiKeyboardService : InputMethodService() {
         private const val REPEAT_INITIAL_DELAY_MS = 260L
         private const val REPEAT_INTERVAL_MS = 42L
         private const val SHIFT_DOUBLE_TAP_MS = 360L
-        private const val LANDSCAPE_MAX_HEIGHT_PERCENT = 125
         private const val ACTIVE_ADD_WORD_MIN_LENGTH = 4
         private const val ICON_BACKSPACE = "⌫"
         private const val ICON_CONTEXT = "⌘"

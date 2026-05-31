@@ -288,11 +288,20 @@ class KeyboardSettingsActivity : Activity() {
         addSectionLabel(list, "SIZE")
         addTerminalControl(
             parent = list,
-            label = getString(R.string.setting_keyboard_height),
-            key = KeyboardPrefs.KEY_HEIGHT_PERCENT,
+            label = getString(R.string.setting_portrait_keyboard_height),
+            key = KeyboardPrefs.KEY_PORTRAIT_HEIGHT_PERCENT,
             min = 80,
             max = 180,
-            defaultValue = KeyboardPrefs.DEFAULT_HEIGHT_PERCENT,
+            defaultValue = KeyboardPrefs.DEFAULT_PORTRAIT_HEIGHT_PERCENT,
+            suffix = "%"
+        )
+        addTerminalControl(
+            parent = list,
+            label = getString(R.string.setting_landscape_keyboard_height),
+            key = KeyboardPrefs.KEY_LANDSCAPE_HEIGHT_PERCENT,
+            min = 80,
+            max = 180,
+            defaultValue = KeyboardPrefs.DEFAULT_LANDSCAPE_HEIGHT_PERCENT,
             suffix = "%"
         )
         addTerminalControl(

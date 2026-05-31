@@ -5,7 +5,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object KeyboardProfileBackup {
-    private const val EXPORT_VERSION = 2
+    private const val EXPORT_VERSION = 3
 
     private val profileKeys = listOf(
         KeyboardPrefs.KEY_BACKGROUND_IMAGE_OPACITY,
@@ -15,13 +15,16 @@ object KeyboardProfileBackup {
         KeyboardPrefs.KEY_HEIGHT_PERCENT,
         KeyboardPrefs.KEY_HORIZONTAL_MARGIN_DP,
         KeyboardPrefs.KEY_KEY_GAP_DP,
+        KeyboardPrefs.KEY_LANDSCAPE_HEIGHT_PERCENT,
         KeyboardPrefs.KEY_LEARN_LOCAL_WORDS,
         KeyboardPrefs.KEY_LEGACY_OUTER_MARGIN_DP,
         KeyboardPrefs.KEY_LOCAL_SUGGESTIONS,
+        KeyboardPrefs.KEY_PORTRAIT_HEIGHT_PERCENT,
         KeyboardPrefs.KEY_QUICK_PERIOD,
         KeyboardPrefs.KEY_SHOW_ARROW_ROW,
         KeyboardPrefs.KEY_SHOW_NUMBER_ROW,
         KeyboardPrefs.KEY_SOUND_ON_KEYPRESS,
+        KeyboardPrefs.KEY_SPLIT_KEYBOARD,
         KeyboardPrefs.KEY_STROKE_WIDTH_DP,
         KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN,
         KeyboardPrefs.KEY_VIBRATE_ON_KEYPRESS,
