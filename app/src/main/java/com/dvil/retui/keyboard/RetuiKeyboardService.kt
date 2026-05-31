@@ -1118,26 +1118,33 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun vibrateKey(view: View, feedbackConstant: Int, durationMs: Long) {
         view.isHapticFeedbackEnabled = true
-        val handled = view.performHapticFeedback(
-            feedbackConstant,
-            HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
-        )
+        val handled = view.performHapticFeedback(feedbackConstant)
         if (handled) return
 
-        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            getSystemService(VibratorManager::class.java)?.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            getSystemService(VIBRATOR_SERVICE) as? Vibrator
-        } ?: return
+        val vibrator = systemVibrator() ?: return
 
         if (!vibrator.hasVibrator()) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             vibrator.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
         } else {
-            @Suppress("DEPRECATION")
-            vibrator.vibrate(durationMs)
+            vibrateLegacy(vibrator, durationMs)
         }
+    }
+
+    private fun systemVibrator(): Vibrator? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            getSystemService(VibratorManager::class.java)?.defaultVibrator
+        } else {
+            legacySystemVibrator()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun legacySystemVibrator(): Vibrator? = getSystemService(VIBRATOR_SERVICE) as? Vibrator
+
+    @Suppress("DEPRECATION")
+    private fun vibrateLegacy(vibrator: Vibrator, durationMs: Long) {
+        vibrator.vibrate(durationMs)
     }
 
     private fun keyboardRoot(orientation: Int): LinearLayout {
@@ -1166,14 +1173,16 @@ class RetuiKeyboardService : InputMethodService() {
         val inset = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             insets.getInsets(WindowInsets.Type.systemBars()).bottom
         } else {
-            @Suppress("DEPRECATION")
-            insets.systemWindowInsetBottom
+            legacySystemWindowInsetBottom(insets)
         }
         if (isLandscape()) {
             return inset
         }
         return inset
     }
+
+    @Suppress("DEPRECATION")
+    private fun legacySystemWindowInsetBottom(insets: WindowInsets): Int = insets.systemWindowInsetBottom
 
     private fun keyboardBackground(): Drawable? {
         val bitmap = backgroundBitmap() ?: return ColorDrawable(theme.bg)
@@ -2067,12 +2076,17 @@ class RetuiKeyboardService : InputMethodService() {
         PREVIEW
     }
 
+    private abstract class TranslucentDrawable : Drawable() {
+        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+    }
+
     private class CyberPanelDrawable(
         private val fillColor: Int,
         private val borderColor: Int,
         strokeWidthPx: Float,
         private val notch: Boolean
-    ) : Drawable() {
+    ) : TranslucentDrawable() {
         private val strokeWidthPx = max(1f, strokeWidthPx)
         private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -2182,15 +2196,13 @@ class RetuiKeyboardService : InputMethodService() {
             invalidateSelf()
         }
 
-        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     }
 
     private class KeyboardBackgroundDrawable(
         fillColor: Int,
         private val bitmap: Bitmap,
         opacityPercent: Int
-    ) : Drawable() {
+    ) : TranslucentDrawable() {
         private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
         private val source = Rect()
@@ -2231,14 +2243,12 @@ class RetuiKeyboardService : InputMethodService() {
             invalidateSelf()
         }
 
-        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     }
 
     private class CrtOverlayDrawable(
         density: Float,
         accentColor: Int
-    ) : Drawable() {
+    ) : TranslucentDrawable() {
         private val scanlineStepPx = max(3f, density * 3f)
         private val scanlineHeightPx = max(1f, density)
         private val beamHeightPx = max(1f, density * 0.5f)
@@ -2335,8 +2345,6 @@ class RetuiKeyboardService : InputMethodService() {
             invalidateSelf()
         }
 
-        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     }
 
     companion object {

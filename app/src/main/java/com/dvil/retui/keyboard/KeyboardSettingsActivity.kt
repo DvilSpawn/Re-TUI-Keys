@@ -1,6 +1,5 @@
 package com.dvil.retui.keyboard
 
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -39,18 +38,24 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import java.io.OutputStreamWriter
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-class KeyboardSettingsActivity : Activity() {
+class KeyboardSettingsActivity : ComponentActivity() {
     private lateinit var prefs: SharedPreferences
     private lateinit var list: LinearLayout
     private lateinit var settingsFrame: FrameLayout
     private lateinit var previewDock: LinearLayout
     private lateinit var previewInput: EditText
+    private lateinit var backgroundPicker: ActivityResultLauncher<Intent>
+    private lateinit var profileBackupPicker: ActivityResultLauncher<Intent>
+    private lateinit var profileRestorePicker: ActivityResultLauncher<Intent>
     private var theme = SettingsTheme()
     private var themeDraft = SettingsTheme()
     private var topInsetPx = 0
@@ -63,6 +68,7 @@ class KeyboardSettingsActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        registerActivityResultLaunchers()
         prefs = getSharedPreferences(KeyboardPrefs.PREFS_NAME, MODE_PRIVATE)
         KeyboardPrefs.migrateLayout(prefs)
         theme = loadSettingsTheme(intent)
@@ -72,7 +78,7 @@ class KeyboardSettingsActivity : Activity() {
         showPreviewKeyboard()
     }
 
-    override fun onNewIntent(intent: Intent?) {
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         cancelPreviewCallbacks()
         setIntent(intent)
@@ -84,24 +90,45 @@ class KeyboardSettingsActivity : Activity() {
     }
 
     private fun configureWindow() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+        applyLegacySystemBarColors(theme.bg)
+        hideStatusBar()
+        window.setSoftInputMode(visibleResizeSoftInputMode())
+    }
+
+    @Suppress("DEPRECATION")
+    private fun applyLegacySystemBarColors(navigationColor: Int) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP &&
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM
+        ) {
             window.statusBarColor = Color.TRANSPARENT
-            window.navigationBarColor = theme.bg
+            window.navigationBarColor = navigationColor
         }
-        @Suppress("DEPRECATION")
+    }
+
+    private fun hideStatusBar() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.insetsController?.hide(WindowInsets.Type.statusBars())
+        } else {
+            hideStatusBarLegacy()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun hideStatusBarLegacy() {
         window.setFlags(
             WindowManager.LayoutParams.FLAG_FULLSCREEN,
             WindowManager.LayoutParams.FLAG_FULLSCREEN
         )
-        @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility =
             View.SYSTEM_UI_FLAG_FULLSCREEN or
                 View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-        window.setSoftInputMode(
-            WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE or
-                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-        )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun visibleResizeSoftInputMode(): Int {
+        return WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE or
+            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
     }
 
     override fun onResume() {
@@ -119,30 +146,31 @@ class KeyboardSettingsActivity : Activity() {
         super.onDestroy()
     }
 
-    @Deprecated("Deprecated in platform API")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (resultCode != RESULT_OK) return
+    private fun registerActivityResultLaunchers() {
+        backgroundPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) handleBackgroundResult(result.data)
+        }
+        profileBackupPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val uri = result.data?.data
+            if (result.resultCode == RESULT_OK && uri != null) backupProfile(uri)
+        }
+        profileRestorePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val uri = result.data?.data
+            if (result.resultCode == RESULT_OK && uri != null) restoreProfile(uri)
+        }
+    }
+
+    private fun handleBackgroundResult(data: Intent?) {
         val uri = data?.data ?: return
-        when (requestCode) {
-            REQUEST_BACKGROUND -> {
-                if (data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0) {
-                    try {
-                        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    } catch (_: SecurityException) {
-                    }
-                }
-                prefs.edit().putString(KeyboardPrefs.KEY_BACKGROUND_IMAGE_URI, uri.toString()).apply()
-                rebuildRows()
-                refreshKeyboard()
-            }
-            REQUEST_PROFILE_BACKUP -> {
-                backupProfile(uri)
-            }
-            REQUEST_PROFILE_RESTORE -> {
-                restoreProfile(uri)
+        if (data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0) {
+            try {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: SecurityException) {
             }
         }
+        prefs.edit().putString(KeyboardPrefs.KEY_BACKGROUND_IMAGE_URI, uri.toString()).apply()
+        rebuildRows()
+        refreshKeyboard()
     }
 
     private fun settingsView(): View {
@@ -417,7 +445,7 @@ class KeyboardSettingsActivity : Activity() {
             intent.type = "image/*"
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-            startActivityForResult(intent, REQUEST_BACKGROUND)
+            backgroundPicker.launch(intent)
         }
 
         addCommandButton(list, getString(R.string.setting_clear_background)) {
@@ -866,14 +894,14 @@ class KeyboardSettingsActivity : Activity() {
             intent.addCategory(Intent.CATEGORY_OPENABLE)
             intent.type = "application/json"
             intent.putExtra(Intent.EXTRA_TITLE, "retui-keyboard-profile.json")
-            startActivityForResult(intent, REQUEST_PROFILE_BACKUP)
+            profileBackupPicker.launch(intent)
         }
         addCommandButton(parent, getString(R.string.setting_profile_restore)) {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
             intent.addCategory(Intent.CATEGORY_OPENABLE)
             intent.type = "application/json"
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            startActivityForResult(intent, REQUEST_PROFILE_RESTORE)
+            profileRestorePicker.launch(intent)
         }
     }
 
@@ -1415,8 +1443,7 @@ class KeyboardSettingsActivity : Activity() {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             insets.getInsets(WindowInsets.Type.systemBars()).top
         } else {
-            @Suppress("DEPRECATION")
-            insets.systemWindowInsetTop
+            legacySystemWindowInsetTop(insets)
         }
     }
 
@@ -1424,10 +1451,15 @@ class KeyboardSettingsActivity : Activity() {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             insets.getInsets(WindowInsets.Type.systemBars()).bottom
         } else {
-            @Suppress("DEPRECATION")
-            insets.systemWindowInsetBottom
+            legacySystemWindowInsetBottom(insets)
         }
     }
+
+    @Suppress("DEPRECATION")
+    private fun legacySystemWindowInsetTop(insets: WindowInsets): Int = insets.systemWindowInsetTop
+
+    @Suppress("DEPRECATION")
+    private fun legacySystemWindowInsetBottom(insets: WindowInsets): Int = insets.systemWindowInsetBottom
 
     private fun imeBottomInset(insets: WindowInsets): Int {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -2098,10 +2130,15 @@ class KeyboardSettingsActivity : Activity() {
         }
     }
 
+    private abstract class TranslucentDrawable : Drawable() {
+        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+    }
+
     private class ColorSwatchDrawable(
         private val color: Int,
         private val borderColor: Int
-    ) : Drawable() {
+    ) : TranslucentDrawable() {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
         override fun draw(canvas: Canvas) {
@@ -2150,8 +2187,6 @@ class KeyboardSettingsActivity : Activity() {
             invalidateSelf()
         }
 
-        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     }
 
     private class KeyboardTerminalBorderDrawable(
@@ -2164,7 +2199,7 @@ class KeyboardSettingsActivity : Activity() {
         private val dashGapPx: Float,
         private val cyberdeck: Boolean = false,
         private val cyberdeckNotch: Boolean = true
-    ) : Drawable() {
+    ) : TranslucentDrawable() {
         private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
             color = fillColor
@@ -2338,9 +2373,6 @@ class KeyboardSettingsActivity : Activity() {
             invalidateSelf()
         }
 
-        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
-
         companion object {
             private fun withAlphaComponent(color: Int, alpha: Int): Int {
                 return Color.argb(
@@ -2356,7 +2388,7 @@ class KeyboardSettingsActivity : Activity() {
     private class TerminalCrtOverlayDrawable(
         density: Float,
         accentColor: Int
-    ) : Drawable() {
+    ) : TranslucentDrawable() {
         private val scanlineStepPx = max(3f, density * 3f)
         private val scanlineHeightPx = max(1f, density)
         private val beamHeightPx = max(1f, density * 0.5f)
@@ -2451,14 +2483,9 @@ class KeyboardSettingsActivity : Activity() {
             invalidateSelf()
         }
 
-        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     }
 
     companion object {
-        private const val REQUEST_BACKGROUND = 41
-        private const val REQUEST_PROFILE_BACKUP = 42
-        private const val REQUEST_PROFILE_RESTORE = 43
         private const val BAR_SEGMENTS = 16
         private const val CONTROL_REPEAT_INITIAL_DELAY_MS = 260L
         private const val CONTROL_REPEAT_INTERVAL_MS = 55L

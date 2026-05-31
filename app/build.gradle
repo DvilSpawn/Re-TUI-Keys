@@ -4,21 +4,21 @@ plugins {
 }
 
 android {
-    namespace "com.dvil.retui.keyboard"
-    compileSdk 36
+    namespace = "com.dvil.retui.keyboard"
+    compileSdk = 36
 
     defaultConfig {
-        applicationId "com.dvil.retui.keyboard"
-        minSdk 26
-        targetSdk 36
-        versionCode 8
-        versionName "0.1.7"
+        applicationId = "com.dvil.retui.keyboard"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 8
+        versionName = "0.1.7"
     }
 
     buildTypes {
         release {
-            minifyEnabled true
-            shrinkResources true
+            minifyEnabled = true
+            shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
@@ -33,4 +33,8 @@ kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8
     }
+}
+
+dependencies {
+    implementation("androidx.activity:activity:1.13.0")
 }

@@ -20,10 +20,7 @@ class KeyboardProbeActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.setSoftInputMode(
-            WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE or
-                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-        )
+        window.setSoftInputMode(visibleResizeSoftInputMode())
 
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
@@ -62,12 +59,18 @@ class KeyboardProbeActivity : Activity() {
         input.postDelayed({
             input.requestFocus()
             val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.showSoftInput(input, InputMethodManager.SHOW_FORCED)
+            imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
         }, 250)
     }
 
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun visibleResizeSoftInputMode(): Int {
+        return WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE or
+            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
     }
 
     private class ProbeEditText(context: Context) : EditText(context) {
