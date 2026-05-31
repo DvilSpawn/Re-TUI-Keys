@@ -11,6 +11,7 @@ object KeyboardProfileBackup {
         KeyboardPrefs.KEY_BACKGROUND_IMAGE_OPACITY,
         KeyboardPrefs.KEY_BACKGROUND_IMAGE_URI,
         KeyboardPrefs.KEY_BOTTOM_MARGIN_DP,
+        KeyboardPrefs.KEY_CHARACTER_SIZE_SP,
         KeyboardPrefs.KEY_CORNER_RADIUS_DP,
         KeyboardPrefs.KEY_HEIGHT_PERCENT,
         KeyboardPrefs.KEY_HORIZONTAL_MARGIN_DP,

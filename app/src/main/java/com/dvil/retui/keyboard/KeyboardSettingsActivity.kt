@@ -26,6 +26,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowManager
@@ -306,6 +307,15 @@ class KeyboardSettingsActivity : Activity() {
         )
         addTerminalControl(
             parent = list,
+            label = getString(R.string.setting_character_size),
+            key = KeyboardPrefs.KEY_CHARACTER_SIZE_SP,
+            min = 10,
+            max = 24,
+            defaultValue = KeyboardPrefs.DEFAULT_CHARACTER_SIZE_SP,
+            suffix = "sp"
+        )
+        addTerminalControl(
+            parent = list,
             label = getString(R.string.setting_bottom_margin),
             key = KeyboardPrefs.KEY_BOTTOM_MARGIN_DP,
             min = 0,
@@ -516,7 +526,7 @@ class KeyboardSettingsActivity : Activity() {
         max: Int,
         defaultValue: Int,
         suffix: String,
-        step: Int = 10
+        step: Int = 1
     ) {
         var value = prefs.getInt(key, defaultValue).coerceIn(min, max)
 
@@ -574,8 +584,13 @@ class KeyboardSettingsActivity : Activity() {
 
         fun persist(nextRaw: Int, syncField: Boolean, focusPreview: Boolean) {
             val next = nextRaw.coerceIn(min, max)
+            val changed = next != value || prefs.getInt(key, defaultValue) != next
+            if (!changed) {
+                updateViews(next, syncField)
+                return
+            }
             prefs.edit().putInt(key, next).apply()
-            if (focusPreview) {
+            if (focusPreview && currentFocus != previewInput) {
                 valueInput.clearFocus()
                 previewInput.requestFocus()
             }
@@ -592,8 +607,13 @@ class KeyboardSettingsActivity : Activity() {
             persist(parsed, syncField = true, focusPreview = false)
         }
 
-        minus.setOnClickListener { persist(value - step.coerceAtLeast(1), syncField = true, focusPreview = true) }
-        plus.setOnClickListener { persist(value + step.coerceAtLeast(1), syncField = true, focusPreview = true) }
+        val unitStep = step.coerceAtLeast(1)
+        bindRepeatingMicroButton(minus) {
+            persist(value - unitStep, syncField = true, focusPreview = true)
+        }
+        bindRepeatingMicroButton(plus) {
+            persist(value + unitStep, syncField = true, focusPreview = true)
+        }
         valueInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_DONE) {
                 persistManual()
@@ -1198,6 +1218,36 @@ class KeyboardSettingsActivity : Activity() {
         return button
     }
 
+    private fun bindRepeatingMicroButton(button: View, action: () -> Unit) {
+        var pressed = false
+        val repeat = object : Runnable {
+            override fun run() {
+                if (!pressed) return
+                action()
+                previewHandler.postDelayed(this, CONTROL_REPEAT_INTERVAL_MS)
+            }
+        }
+        button.setOnTouchListener { touched, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    pressed = true
+                    touched.isPressed = true
+                    action()
+                    previewHandler.postDelayed(repeat, CONTROL_REPEAT_INITIAL_DELAY_MS)
+                    true
+                }
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_CANCEL -> {
+                    pressed = false
+                    touched.isPressed = false
+                    previewHandler.removeCallbacks(repeat)
+                    true
+                }
+                else -> true
+            }
+        }
+    }
+
     private fun terminalToggleChip(enabled: Boolean): TextView {
         val chip = terminalLabel(if (enabled) "ON" else "OFF", 12f, bold = true)
         chip.gravity = Gravity.CENTER
@@ -1281,6 +1331,7 @@ class KeyboardSettingsActivity : Activity() {
 
     private fun refreshKeyboard() {
         if (!::previewInput.isInitialized) return
+        sendRefreshSettings()
         sendPreviewTheme()
         if (currentFocus !is EditText || currentFocus == previewInput) {
             showPreviewKeyboard(delayMs = 80L)
@@ -1293,11 +1344,15 @@ class KeyboardSettingsActivity : Activity() {
         previewFocusRunnable = Runnable {
             if (isFinishing || !::previewInput.isInitialized) return@Runnable
             previewInput.requestFocus()
+            sendRefreshSettings()
             sendPreviewTheme()
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             imm.showSoftInput(previewInput, InputMethodManager.SHOW_IMPLICIT)
             previewThemeRunnable = Runnable {
-                if (!isFinishing) sendPreviewTheme()
+                if (!isFinishing) {
+                    sendRefreshSettings()
+                    sendPreviewTheme()
+                }
             }
             previewHandler.postDelayed(previewThemeRunnable!!, 160L)
         }
@@ -1341,6 +1396,12 @@ class KeyboardSettingsActivity : Activity() {
         }
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.sendAppPrivateCommand(previewInput, RetuiKeyboardService.ACTION_APPLY_THEME, data)
+    }
+
+    private fun sendRefreshSettings() {
+        if (!::previewInput.isInitialized) return
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.sendAppPrivateCommand(previewInput, RetuiKeyboardService.ACTION_REFRESH_SETTINGS, Bundle.EMPTY)
     }
 
     private fun applySystemInsets(insets: WindowInsets) {
@@ -2399,6 +2460,8 @@ class KeyboardSettingsActivity : Activity() {
         private const val REQUEST_PROFILE_BACKUP = 42
         private const val REQUEST_PROFILE_RESTORE = 43
         private const val BAR_SEGMENTS = 16
+        private const val CONTROL_REPEAT_INITIAL_DELAY_MS = 260L
+        private const val CONTROL_REPEAT_INTERVAL_MS = 55L
         private const val THEME_OVERRIDE_PREFIX = "theme."
 
         private val SURFACE_BG = Color.rgb(2, 6, 4)

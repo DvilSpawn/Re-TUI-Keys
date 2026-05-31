@@ -54,6 +54,7 @@ class RetuiKeyboardService : InputMethodService() {
         backgroundImageOpacity = KeyboardPrefs.DEFAULT_BACKGROUND_IMAGE_OPACITY,
         backgroundImageUri = null,
         bottomMarginDp = KeyboardPrefs.DEFAULT_BOTTOM_MARGIN_DP,
+        characterSizeSp = KeyboardPrefs.DEFAULT_CHARACTER_SIZE_SP,
         cornerRadiusDp = KeyboardPrefs.DEFAULT_CORNER_RADIUS_DP,
         horizontalMarginDp = KeyboardPrefs.DEFAULT_HORIZONTAL_MARGIN_DP,
         keyGapDp = KeyboardPrefs.DEFAULT_KEY_GAP_DP,
@@ -208,7 +209,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun buildPortraitKeyboard(): View {
         val root = keyboardRoot(LinearLayout.VERTICAL)
         if (shouldOfferSuggestions()) {
-            root.addView(suggestionStripView(), rowParams(32))
+            root.addView(suggestionStripView(), fixedRowParams(35))
         }
         val main = keyboardBody()
         if (usesNumberPad()) {
@@ -223,7 +224,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun buildLandscapeKeyboard(): View {
         val root = keyboardRoot(LinearLayout.VERTICAL)
         if (shouldOfferSuggestions()) {
-            root.addView(suggestionStripView(), rowParams(28))
+            root.addView(suggestionStripView(), fixedRowParams(28))
         }
         val main = keyboardBody()
         if (usesNumberPad()) {
@@ -374,7 +375,16 @@ class RetuiKeyboardService : InputMethodService() {
         }
         addKeyRow(parent, textRow("qwertyuiop", longLabels = if (layout.showNumberRow) null else "1234567890"), keyHeight)
         val homeRowSpacer = if (landscape) 0.35f else 0.55f
-        addKeyRow(parent, textRow("asdfghjkl", leadingSpacer = homeRowSpacer, trailingSpacer = homeRowSpacer), keyHeight)
+        addKeyRow(
+            parent,
+            textRow(
+                "asdfghjkl",
+                leadingSpacer = homeRowSpacer,
+                trailingSpacer = homeRowSpacer,
+                edgeAliases = !landscape
+            ),
+            keyHeight
+        )
         val third = mutableListOf(KeySpec(shiftLabel(), if (landscape) 1.15f else 1.35f, Special.SHIFT))
         third.addAll(textRow("zxcvbnm"))
         third.add(KeySpec(ICON_BACKSPACE, if (landscape) 1.15f else 1.35f, Special.BACKSPACE))
@@ -691,19 +701,43 @@ class RetuiKeyboardService : InputMethodService() {
         chars: String,
         leadingSpacer: Float = 0f,
         trailingSpacer: Float = 0f,
-        longLabels: String? = null
+        longLabels: String? = null,
+        edgeAliases: Boolean = false
     ): MutableList<KeySpec> {
         val out = mutableListOf<KeySpec>()
-        if (leadingSpacer > 0f) out.add(KeySpec("", leadingSpacer, Special.SPACER))
+        if (leadingSpacer > 0f) {
+            val first = shiftedChar(chars.firstOrNull())
+            out.add(
+                if (edgeAliases && first != null) {
+                    KeySpec("", leadingSpacer, text = first, edgeAlias = true)
+                } else {
+                    KeySpec("", leadingSpacer, Special.SPACER)
+                }
+            )
+        }
         chars.forEach { ch ->
             val index = chars.indexOf(ch)
-            val raw = ch.toString()
-            val label = if (isShiftActive()) raw.uppercase() else raw
+            val label = shiftedChar(ch) ?: ch.toString()
             val longLabel = longLabels?.getOrNull(index)?.toString()
             out.add(KeySpec(label, text = label, longLabel = longLabel, longText = longLabel))
         }
-        if (trailingSpacer > 0f) out.add(KeySpec("", trailingSpacer, Special.SPACER))
+        if (trailingSpacer > 0f) {
+            val last = shiftedChar(chars.lastOrNull())
+            out.add(
+                if (edgeAliases && last != null) {
+                    KeySpec("", trailingSpacer, text = last, edgeAlias = true)
+                } else {
+                    KeySpec("", trailingSpacer, Special.SPACER)
+                }
+            )
+        }
         return out
+    }
+
+    private fun shiftedChar(ch: Char?): String? {
+        ch ?: return null
+        val raw = ch.toString()
+        return if (isShiftActive()) raw.uppercase() else raw
     }
 
     private fun commaKey(weight: Float = 1f): KeySpec {
@@ -781,6 +815,9 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun keyView(key: KeySpec): View {
+        if (key.edgeAlias) {
+            return edgeAliasKey(key)
+        }
         if (key.longText == null && key.longKeyCode == null && key.longSpecial == null) {
             return actionKey(
                 key.label,
@@ -799,21 +836,43 @@ class RetuiKeyboardService : InputMethodService() {
         view.background = keyBackground(active = false)
         bindLongPressKey(view, key)
 
-        val primary = keyLabel(key.label, Gravity.CENTER, keyTextSize(key.label))
-        view.addView(primary, FrameLayout.LayoutParams(-1, -1))
-
-        if (!key.longLabel.isNullOrBlank()) {
-            val hint = keyLabel(key.longLabel, Gravity.TOP or Gravity.END, max(7, keyTextSize(key.label) - 6))
-            hint.alpha = 0.78f
-            hint.setPadding(0, dp(1), dp(4), 0)
-            view.addView(hint, FrameLayout.LayoutParams(-1, -1))
-        }
+        view.addView(longPressLabelGroup(key), FrameLayout.LayoutParams(-2, -1, Gravity.CENTER))
 
         view.contentDescription = if (key.longLabel.isNullOrBlank()) {
             key.label
         } else {
             "${key.label}, long press ${key.longLabel}"
         }
+        return view
+    }
+
+    private fun longPressLabelGroup(key: KeySpec): LinearLayout {
+        val group = LinearLayout(this)
+        group.orientation = LinearLayout.HORIZONTAL
+        group.gravity = Gravity.CENTER
+        group.isBaselineAligned = false
+
+        val primary = keyLabel(key.label, Gravity.CENTER, keyTextSize(key.label))
+        group.addView(primary, LinearLayout.LayoutParams(-2, -2))
+
+        val longLabel = key.longLabel
+        if (!longLabel.isNullOrBlank()) {
+            val hint = keyLabel(longLabel, Gravity.CENTER, altKeyTextSize(key.label, longLabel))
+            hint.alpha = 0.82f
+            hint.translationY = -dp(6).toFloat()
+            val hintParams = LinearLayout.LayoutParams(-2, -2)
+            hintParams.leftMargin = dp(1)
+            group.addView(hint, hintParams)
+        }
+
+        return group
+    }
+
+    private fun edgeAliasKey(key: KeySpec): View {
+        val view = View(this)
+        view.background = ColorDrawable(Color.TRANSPARENT)
+        view.contentDescription = key.text ?: key.label
+        bindImmediateKey(view, action = { handleKey(key) })
         return view
     }
 
@@ -868,6 +927,7 @@ class RetuiKeyboardService : InputMethodService() {
         view.isClickable = true
         view.isFocusable = false
         var longPressHandled = false
+        var primaryCommitted = false
         var longPressRunnable: Runnable? = null
         var popup: PopupWindow? = null
         fun clearPopup() {
@@ -878,11 +938,18 @@ class RetuiKeyboardService : InputMethodService() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     longPressHandled = false
+                    primaryCommitted = false
                     touched.isPressed = true
                     pressFeedback(touched)
+                    if (canCommitPrimaryOnDown(key)) {
+                        handleKey(key)
+                        primaryCommitted = true
+                    }
                     longPressRunnable = Runnable {
                         longPressHandled = true
                         popup = showLongPressPreview(view, key)
+                        if (primaryCommitted) rollbackPrimaryCommit(key)
+                        handleLongKey(key)
                         if (layout.vibrateOnKeypress) {
                             vibrateKey(touched, HapticFeedbackConstants.LONG_PRESS, durationMs = 18L)
                         }
@@ -896,9 +963,11 @@ class RetuiKeyboardService : InputMethodService() {
                     clearPopup()
                     touched.isPressed = false
                     if (longPressHandled) {
-                        handleLongKey(key)
-                    } else {
+                        // Long-press action already fired at timeout for better touch latency.
+                    } else if (!primaryCommitted) {
                         handleKey(key)
+                    } else {
+                        refreshSuggestionStripSoon()
                     }
                     true
                 }
@@ -912,6 +981,18 @@ class RetuiKeyboardService : InputMethodService() {
                 else -> true
             }
         }
+    }
+
+    private fun canCommitPrimaryOnDown(key: KeySpec): Boolean {
+        return key.longSpecial == null &&
+            key.text != null &&
+            key.special == null &&
+            !isShiftActive()
+    }
+
+    private fun rollbackPrimaryCommit(key: KeySpec) {
+        val text = key.text ?: return
+        currentInputConnection?.deleteSurroundingText(text.length, 0)
     }
 
     private fun showLongPressPreview(anchor: View, key: KeySpec): PopupWindow? {
@@ -958,13 +1039,20 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun keyTextSize(label: String): Int {
-        val baseSize = theme.fontSizeSp.coerceIn(10, 18)
+        val baseSize = layout.characterSizeSp.coerceIn(10, 24)
         return when {
             label.length > 5 -> max(9, baseSize - 5)
             label.length >= 4 -> max(10, baseSize - 4)
             label.length >= 3 -> max(10, baseSize - 2)
             else -> baseSize
         }
+    }
+
+    private fun altKeyTextSize(primaryLabel: String, altLabel: String): Int {
+        val primarySize = keyTextSize(primaryLabel)
+        val scaled = (primarySize * 0.72f).roundToInt()
+        val adjusted = if (altLabel.length > 1) scaled - 1 else scaled
+        return adjusted.coerceIn(8, max(8, primarySize - 1))
     }
 
     private fun usesNumberPad(): Boolean {
@@ -1151,6 +1239,12 @@ class RetuiKeyboardService : InputMethodService() {
         val minHeight = if (isLandscape()) 24 else 28
         val scaledHeight = max(minHeight, (heightDp * heightPercent / 100f).roundToInt())
         val params = LinearLayout.LayoutParams(-1, dp(scaledHeight))
+        params.setMargins(0, 0, 0, dp(layout.keyGapDp))
+        return params
+    }
+
+    private fun fixedRowParams(heightDp: Int): LinearLayout.LayoutParams {
+        val params = LinearLayout.LayoutParams(-1, dp(heightDp))
         params.setMargins(0, 0, 0, dp(layout.keyGapDp))
         return params
     }
@@ -1936,6 +2030,7 @@ class RetuiKeyboardService : InputMethodService() {
         val longText: String? = null,
         val longKeyCode: Int? = null,
         val longSpecial: Special? = null,
+        val edgeAlias: Boolean = false,
         val specialStyle: Boolean = false
     )
 
