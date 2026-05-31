@@ -75,6 +75,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         themeDraft = theme
         configureWindow()
         setContentView(settingsView())
+        hideStatusBar()
         showPreviewKeyboard()
     }
 
@@ -86,12 +87,12 @@ class KeyboardSettingsActivity : ComponentActivity() {
         themeDraft = theme
         configureWindow()
         setContentView(settingsView())
+        hideStatusBar()
         showPreviewKeyboard()
     }
 
     private fun configureWindow() {
         applyLegacySystemBarColors(theme.bg)
-        hideStatusBar()
         window.setSoftInputMode(visibleResizeSoftInputMode())
     }
 
@@ -107,7 +108,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
 
     private fun hideStatusBar() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.insetsController?.hide(WindowInsets.Type.statusBars())
+            window.decorView.windowInsetsController?.hide(WindowInsets.Type.statusBars())
         } else {
             hideStatusBarLegacy()
         }
