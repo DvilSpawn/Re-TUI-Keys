@@ -18,6 +18,8 @@
     <string name="setting_show_arrow_row_summary">Adds a cursor row for terminal movement.</string>
     <string name="setting_split_keyboard">Split keyboard</string>
     <string name="setting_split_keyboard_summary">In landscape, separates QWERTY and adds ESC, TAB, CTRL, ALT, SUPER, and DEL in the center.</string>
+    <string name="setting_portrait_special_keys">Portrait special keys</string>
+    <string name="setting_portrait_special_keys_summary">Adds ESC, TAB, CTRL, ALT, SUPER, and DEL below suggestions in portrait.</string>
     <string name="setting_quick_period">Quick period key</string>
     <string name="setting_quick_period_summary">Keeps a period key beside space.</string>
     <string name="setting_vibrate_on_keypress">Vibrate on keypress</string>

@@ -15,6 +15,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -92,7 +93,9 @@ class KeyboardSettingsActivity : ComponentActivity() {
     }
 
     private fun configureWindow() {
-        applyLegacySystemBarColors(theme.bg)
+        window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        window.decorView.setBackgroundColor(Color.TRANSPARENT)
+        applyLegacySystemBarColors(Color.TRANSPARENT)
         window.setSoftInputMode(visibleResizeSoftInputMode())
     }
 
@@ -176,7 +179,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
 
     private fun settingsView(): View {
         val root = FrameLayout(this)
-        root.setBackgroundColor(theme.bg)
+        root.setBackgroundColor(Color.TRANSPARENT)
         root.clipToPadding = false
         root.clipChildren = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && theme.crtFilter) {
@@ -306,6 +309,13 @@ class KeyboardSettingsActivity : ComponentActivity() {
             summary = getString(R.string.setting_split_keyboard_summary),
             key = KeyboardPrefs.KEY_SPLIT_KEYBOARD,
             defaultValue = KeyboardPrefs.DEFAULT_SPLIT_KEYBOARD
+        )
+        addTerminalToggle(
+            parent = list,
+            label = getString(R.string.setting_portrait_special_keys),
+            summary = getString(R.string.setting_portrait_special_keys_summary),
+            key = KeyboardPrefs.KEY_SHOW_PORTRAIT_SPECIAL_KEYS,
+            defaultValue = KeyboardPrefs.DEFAULT_SHOW_PORTRAIT_SPECIAL_KEYS
         )
         addTerminalToggle(
             parent = list,

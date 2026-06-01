@@ -67,6 +67,7 @@ class RetuiKeyboardService : InputMethodService() {
         quickPeriod = KeyboardPrefs.DEFAULT_QUICK_PERIOD,
         showArrowRow = KeyboardPrefs.DEFAULT_SHOW_ARROW_ROW,
         showNumberRow = KeyboardPrefs.DEFAULT_SHOW_NUMBER_ROW,
+        showPortraitSpecialKeys = KeyboardPrefs.DEFAULT_SHOW_PORTRAIT_SPECIAL_KEYS,
         soundOnKeypress = KeyboardPrefs.DEFAULT_SOUND_ON_KEYPRESS,
         splitKeyboard = KeyboardPrefs.DEFAULT_SPLIT_KEYBOARD,
         strokeWidthDp = KeyboardPrefs.DEFAULT_STROKE_WIDTH_DP,
@@ -362,7 +363,11 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun addTextRows(parent: LinearLayout, landscape: Boolean) {
-        val densePortrait = !landscape && (layout.showNumberRow || layout.showArrowRow)
+        val densePortrait = !landscape && (
+            layout.showNumberRow ||
+                layout.showArrowRow ||
+                layout.showPortraitSpecialKeys
+            )
         val keyHeight = when {
             landscape -> 28
             densePortrait -> 32
@@ -381,6 +386,9 @@ class RetuiKeyboardService : InputMethodService() {
             return
         }
 
+        if (!landscape && layout.showPortraitSpecialKeys) {
+            addKeyRow(parent, portraitSpecialKeyRow(), if (densePortrait) 28 else 30)
+        }
         if (layout.showNumberRow) {
             addKeyRow(parent, numberRow(), if (landscape) 26 else 28)
         }
@@ -495,6 +503,17 @@ class RetuiKeyboardService : InputMethodService() {
                 KeySpec("DEL", 1f, Special.FORWARD_DELETE, specialStyle = true)
             )
         }
+    }
+
+    private fun portraitSpecialKeyRow(): List<KeySpec> {
+        return listOf(
+            KeySpec(ICON_ESCAPE, 1f, keyCode = KeyEvent.KEYCODE_ESCAPE, specialStyle = true),
+            KeySpec(ICON_TAB, 1f, keyCode = KeyEvent.KEYCODE_TAB, specialStyle = true),
+            KeySpec("CTRL", 1f, Special.CTRL, specialStyle = true),
+            KeySpec("ALT", 1f, Special.ALT, specialStyle = true),
+            KeySpec("SUPER", 1.15f, Special.SUPER, specialStyle = true),
+            KeySpec("DEL", 1f, Special.FORWARD_DELETE, specialStyle = true)
+        )
     }
 
     private fun addSplitBottomRow(parent: LinearLayout, heightDp: Int) {
@@ -730,7 +749,16 @@ class RetuiKeyboardService : InputMethodService() {
             val index = chars.indexOf(ch)
             val label = shiftedChar(ch) ?: ch.toString()
             val longLabel = longLabels?.getOrNull(index)?.toString()
-            out.add(KeySpec(label, text = label, longLabel = longLabel, longText = longLabel))
+            val accentVariants = accentVariantsFor(ch)
+            out.add(
+                KeySpec(
+                    label = label,
+                    text = label,
+                    longLabel = if (accentVariants.isNotEmpty()) "..." else longLabel,
+                    longText = if (accentVariants.isEmpty()) longLabel else null,
+                    accentVariants = accentVariants
+                )
+            )
         }
         if (trailingSpacer > 0f) {
             val last = shiftedChar(chars.lastOrNull())
@@ -749,6 +777,25 @@ class RetuiKeyboardService : InputMethodService() {
         ch ?: return null
         val raw = ch.toString()
         return if (isShiftActive()) raw.uppercase() else raw
+    }
+
+    private fun accentVariantsFor(ch: Char): List<String> {
+        val variants = when (ch.lowercaseChar()) {
+            'a' -> listOf("á", "à", "â", "ä", "æ", "å", "ã")
+            'c' -> listOf("ç")
+            'e' -> listOf("é", "è", "ê", "ë")
+            'i' -> listOf("í", "ì", "î", "ï")
+            'n' -> listOf("ñ")
+            'o' -> listOf("ó", "ò", "ô", "ö", "œ", "ø", "õ")
+            's' -> listOf("ß")
+            'u' -> listOf("ú", "ù", "û", "ü")
+            else -> emptyList()
+        }
+        return if (ch.isUpperCase()) {
+            variants.map { variant -> if (variant == "ß") "ẞ" else variant.uppercase() }
+        } else {
+            variants
+        }
     }
 
     private fun commaKey(weight: Float = 1f): KeySpec {
@@ -824,7 +871,7 @@ class RetuiKeyboardService : InputMethodService() {
         if (key.edgeAlias) {
             return edgeAliasKey(key)
         }
-        if (key.longText == null && key.longKeyCode == null && key.longSpecial == null) {
+        if (key.longText == null && key.longKeyCode == null && key.longSpecial == null && key.accentVariants.isEmpty()) {
             return actionKey(
                 key.label,
                 action = { handleKey(key) },
@@ -936,15 +983,32 @@ class RetuiKeyboardService : InputMethodService() {
         var primaryCommitted = false
         var longPressRunnable: Runnable? = null
         var popup: PopupWindow? = null
+        var accentPopup: AccentPopup? = null
+        var accentIndex = 0
+        var downRawX = 0f
         fun clearPopup() {
             popup?.dismiss()
             popup = null
+            accentPopup?.popup?.dismiss()
+            accentPopup = null
+        }
+        fun updateAccentSelection(rawX: Float) {
+            val current = accentPopup ?: return
+            val nextIndex = current.indexForRawX(rawX)
+            if (nextIndex == accentIndex) return
+            accentIndex = nextIndex
+            current.select(nextIndex)
+            if (layout.vibrateOnKeypress) {
+                vibrateKey(view, HapticFeedbackConstants.KEYBOARD_TAP, durationMs = 6L)
+            }
         }
         view.setOnTouchListener { touched, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     longPressHandled = false
                     primaryCommitted = false
+                    accentIndex = 0
+                    downRawX = event.rawX
                     touched.isPressed = true
                     pressFeedback(touched)
                     if (canCommitPrimaryOnDown(key)) {
@@ -953,9 +1017,15 @@ class RetuiKeyboardService : InputMethodService() {
                     }
                     longPressRunnable = Runnable {
                         longPressHandled = true
-                        popup = showLongPressPreview(view, key)
                         if (primaryCommitted) rollbackPrimaryCommit(key)
-                        handleLongKey(key)
+                        if (key.accentVariants.isNotEmpty()) {
+                            accentIndex = 0
+                            accentPopup = showAccentVariantPicker(view, key.accentVariants)
+                            updateAccentSelection(downRawX)
+                        } else {
+                            popup = showLongPressPreview(view, key)
+                            handleLongKey(key)
+                        }
                         if (layout.vibrateOnKeypress) {
                             vibrateKey(touched, HapticFeedbackConstants.LONG_PRESS, durationMs = 18L)
                         }
@@ -963,12 +1033,25 @@ class RetuiKeyboardService : InputMethodService() {
                     repeatHandler.postDelayed(longPressRunnable!!, ViewConfiguration.getLongPressTimeout().toLong())
                     true
                 }
+                MotionEvent.ACTION_MOVE -> {
+                    if (longPressHandled && key.accentVariants.isNotEmpty()) {
+                        updateAccentSelection(event.rawX)
+                    }
+                    true
+                }
                 MotionEvent.ACTION_UP -> {
                     longPressRunnable?.let { repeatHandler.removeCallbacks(it) }
                     longPressRunnable = null
+                    val selectedAccent = if (longPressHandled && key.accentVariants.isNotEmpty()) {
+                        key.accentVariants.getOrNull(accentIndex)
+                    } else {
+                        null
+                    }
                     clearPopup()
                     touched.isPressed = false
-                    if (longPressHandled) {
+                    if (selectedAccent != null) {
+                        commitFromKey(selectedAccent)
+                    } else if (longPressHandled) {
                         // Long-press action already fired at timeout for better touch latency.
                     } else if (!primaryCommitted) {
                         handleKey(key)
@@ -1026,6 +1109,40 @@ class RetuiKeyboardService : InputMethodService() {
         return try {
             popup.showAsDropDown(anchor, xOffset, yOffset)
             popup
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun showAccentVariantPicker(anchor: View, variants: List<String>): AccentPopup? {
+        if (variants.isEmpty()) return null
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.background = panel(brightenColor(theme.keyBg, 1.22f, 30), theme.border, 4)
+        row.elevation = dpFloat(8f)
+
+        val cellWidth = dp(40)
+        val height = dp(44)
+        val cells = variants.map { variant ->
+            keyLabel(variant, Gravity.CENTER, max(14, keyTextSize(variant) + 4)).also { cell ->
+                cell.contentDescription = "Insert $variant"
+                row.addView(cell, LinearLayout.LayoutParams(cellWidth, -1))
+            }
+        }
+
+        val width = cellWidth * variants.size
+        val popup = PopupWindow(row, width, height, false)
+        popup.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        popup.isOutsideTouchable = false
+        popup.isClippingEnabled = false
+        popup.elevation = dpFloat(8f)
+
+        val xOffset = (anchor.width - width) / 2
+        val yOffset = -anchor.height - height - dp(18)
+        val activeBackground = panel(brightenColor(theme.keyBg, 1.42f, 70), theme.border, 4)
+        return try {
+            popup.showAsDropDown(anchor, xOffset, yOffset)
+            AccentPopup(popup, row, cells, cellWidth, activeBackground).also { it.select(0) }
         } catch (_: Exception) {
             null
         }
@@ -2124,9 +2241,32 @@ class RetuiKeyboardService : InputMethodService() {
         val longText: String? = null,
         val longKeyCode: Int? = null,
         val longSpecial: Special? = null,
+        val accentVariants: List<String> = emptyList(),
         val edgeAlias: Boolean = false,
         val specialStyle: Boolean = false
     )
+
+    private class AccentPopup(
+        val popup: PopupWindow,
+        private val row: LinearLayout,
+        private val cells: List<TextView>,
+        private val cellWidth: Int,
+        private val activeBackground: Drawable
+    ) {
+        private val location = IntArray(2)
+
+        fun indexForRawX(rawX: Float): Int {
+            row.getLocationOnScreen(location)
+            val relativeX = rawX - location[0]
+            return (relativeX / cellWidth).toInt().coerceIn(0, cells.lastIndex)
+        }
+
+        fun select(index: Int) {
+            cells.forEachIndexed { cellIndex, cell ->
+                cell.background = if (cellIndex == index) activeBackground.constantState?.newDrawable() ?: activeBackground else null
+            }
+        }
+    }
 
     private data class KeyboardViewSignature(
         val orientation: Int,

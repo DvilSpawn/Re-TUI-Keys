@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.text.Normalizer
 import java.util.Locale
 import java.util.zip.GZIPInputStream
 
@@ -475,7 +476,7 @@ object LocalDictionary {
     }
 
     private fun searchKey(word: String): String {
-        return word.filterNot { it == '\'' }
+        return dictionarySearchKey(word)
     }
 
     private fun buildStaticIndex(entries: List<StaticWordEntry>): StaticIndex {
@@ -606,6 +607,23 @@ object LocalDictionary {
     }
 }
 
+private fun dictionarySearchKey(word: String): String {
+    val decomposed = Normalizer.normalize(word, Normalizer.Form.NFD)
+    val out = StringBuilder(decomposed.length)
+    decomposed.forEach { char ->
+        when {
+            char == '\'' -> Unit
+            Character.getType(char) == Character.NON_SPACING_MARK.toInt() -> Unit
+            char == 'æ' -> out.append("ae")
+            char == 'œ' -> out.append("oe")
+            char == 'ø' -> out.append('o')
+            char == 'ß' -> out.append("ss")
+            else -> out.append(char)
+        }
+    }
+    return out.toString()
+}
+
 data class UserWordEntry(
     val word: String,
     val frequency: Int,
@@ -620,7 +638,7 @@ private data class RankedCandidate(
 private data class StaticWordEntry(
     val word: String,
     val weight: Int,
-    val searchKey: String = word.filterNot { it == '\'' }
+    val searchKey: String = dictionarySearchKey(word)
 )
 
 private data class StaticIndex(

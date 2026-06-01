@@ -21,6 +21,7 @@ object KeyboardPrefs {
     const val KEY_QUICK_PERIOD = "layout.quickPeriod"
     const val KEY_SHOW_ARROW_ROW = "layout.showArrowRow"
     const val KEY_SHOW_NUMBER_ROW = "layout.showNumberRow"
+    const val KEY_SHOW_PORTRAIT_SPECIAL_KEYS = "layout.showPortraitSpecialKeys"
     const val KEY_SOUND_ON_KEYPRESS = "layout.soundOnKeypress"
     const val KEY_SPLIT_KEYBOARD = "layout.splitKeyboard"
     const val KEY_STROKE_WIDTH_DP = "layout.strokeWidthDp"
@@ -44,6 +45,7 @@ object KeyboardPrefs {
     const val DEFAULT_QUICK_PERIOD = true
     const val DEFAULT_SHOW_ARROW_ROW = false
     const val DEFAULT_SHOW_NUMBER_ROW = false
+    const val DEFAULT_SHOW_PORTRAIT_SPECIAL_KEYS = false
     const val DEFAULT_SOUND_ON_KEYPRESS = false
     const val DEFAULT_SPLIT_KEYBOARD = false
     const val DEFAULT_STROKE_WIDTH_DP = 1
@@ -76,6 +78,10 @@ object KeyboardPrefs {
             quickPeriod = prefs.getBoolean(KEY_QUICK_PERIOD, DEFAULT_QUICK_PERIOD),
             showArrowRow = prefs.getBoolean(KEY_SHOW_ARROW_ROW, DEFAULT_SHOW_ARROW_ROW),
             showNumberRow = prefs.getBoolean(KEY_SHOW_NUMBER_ROW, DEFAULT_SHOW_NUMBER_ROW),
+            showPortraitSpecialKeys = prefs.getBoolean(
+                KEY_SHOW_PORTRAIT_SPECIAL_KEYS,
+                DEFAULT_SHOW_PORTRAIT_SPECIAL_KEYS
+            ),
             soundOnKeypress = prefs.getBoolean(KEY_SOUND_ON_KEYPRESS, DEFAULT_SOUND_ON_KEYPRESS),
             splitKeyboard = prefs.getBoolean(KEY_SPLIT_KEYBOARD, DEFAULT_SPLIT_KEYBOARD),
             strokeWidthDp = prefs.getInt(KEY_STROKE_WIDTH_DP, DEFAULT_STROKE_WIDTH_DP).coerceIn(0, 5),
@@ -101,6 +107,7 @@ object KeyboardPrefs {
             .putBoolean(KEY_QUICK_PERIOD, DEFAULT_QUICK_PERIOD)
             .putBoolean(KEY_SHOW_ARROW_ROW, DEFAULT_SHOW_ARROW_ROW)
             .putBoolean(KEY_SHOW_NUMBER_ROW, DEFAULT_SHOW_NUMBER_ROW)
+            .putBoolean(KEY_SHOW_PORTRAIT_SPECIAL_KEYS, DEFAULT_SHOW_PORTRAIT_SPECIAL_KEYS)
             .putBoolean(KEY_SOUND_ON_KEYPRESS, DEFAULT_SOUND_ON_KEYPRESS)
             .putBoolean(KEY_SPLIT_KEYBOARD, DEFAULT_SPLIT_KEYBOARD)
             .putInt(KEY_STROKE_WIDTH_DP, DEFAULT_STROKE_WIDTH_DP)
@@ -205,6 +212,7 @@ data class KeyboardLayoutSettings(
     val quickPeriod: Boolean,
     val showArrowRow: Boolean,
     val showNumberRow: Boolean,
+    val showPortraitSpecialKeys: Boolean,
     val soundOnKeypress: Boolean,
     val splitKeyboard: Boolean,
     val strokeWidthDp: Int,
