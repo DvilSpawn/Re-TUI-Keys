@@ -30,6 +30,7 @@ import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -86,6 +87,8 @@ class RetuiKeyboardService : InputMethodService() {
     private val repeatHandler = Handler(Looper.getMainLooper())
     private var repeatRunnable: Runnable? = null
     private var suggestionRefreshPosted = false
+    private var lastBottomSafeInsetPx = 0
+    private var lastKeyboardViewSignature: KeyboardViewSignature? = null
     private val suggestionRefreshRunnable = Runnable {
         suggestionRefreshPosted = false
         refreshSuggestionStrip()
@@ -120,7 +123,13 @@ class RetuiKeyboardService : InputMethodService() {
         loadPersistedTheme()
         currentInfo = info
         applyEditorInfo(info)
-        setInputView(buildKeyboardView())
+        val nextLayout = KeyboardPrefs.readLayout(prefs)
+        if (keyboardViewSignature(nextLayout) != lastKeyboardViewSignature) {
+            setInputView(buildKeyboardView())
+        } else {
+            layout = nextLayout
+            refreshSuggestionStripSoon()
+        }
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -197,6 +206,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun buildKeyboardView(): View {
         makeImeWindowTransparent()
         layout = KeyboardPrefs.readLayout(prefs)
+        lastKeyboardViewSignature = keyboardViewSignature(layout)
         return if (isLandscape()) buildLandscapeKeyboard() else buildPortraitKeyboard()
     }
 
@@ -1149,10 +1159,11 @@ class RetuiKeyboardService : InputMethodService() {
         val landscape = isLandscape()
         val sidePadding = dp(layout.horizontalMarginDp)
         val bottomPadding = if (landscape) 0 else dp(layout.bottomMarginDp)
-        root.setPadding(sidePadding, 0, sidePadding, bottomPadding)
+        applyKeyboardRootPadding(root, sidePadding, bottomPadding, initialBottomSafeInsetPx())
         root.setOnApplyWindowInsetsListener { view, insets ->
             val bottomInset = systemBottomInset(insets)
-            view.setPadding(sidePadding, 0, sidePadding, bottomPadding + bottomInset)
+            lastBottomSafeInsetPx = bottomInset
+            applyKeyboardRootPadding(view, sidePadding, bottomPadding, bottomInset)
             insets
         }
         root.post { root.requestApplyInsets() }
@@ -1165,20 +1176,68 @@ class RetuiKeyboardService : InputMethodService() {
         return root
     }
 
+    private fun applyKeyboardRootPadding(view: View, sidePadding: Int, bottomPadding: Int, bottomInset: Int) {
+        view.setPadding(sidePadding, 0, sidePadding, bottomPadding + bottomInset)
+    }
+
+    private fun initialBottomSafeInsetPx(): Int {
+        return max(lastBottomSafeInsetPx, gestureNavigationFallbackBottomInsetPx())
+    }
+
     private fun systemBottomInset(insets: WindowInsets): Int {
         val inset = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            insets.getInsets(WindowInsets.Type.systemBars()).bottom
+            val bars = insets.getInsets(WindowInsets.Type.systemBars()).bottom
+            val gestures = insets.getInsets(WindowInsets.Type.systemGestures()).bottom
+            val mandatoryGestures = insets.getInsets(WindowInsets.Type.mandatorySystemGestures()).bottom
+            max(bars, max(gestures, mandatoryGestures))
         } else {
             legacySystemWindowInsetBottom(insets)
         }
-        if (isLandscape()) {
-            return inset
-        }
-        return inset
+        return max(inset, gestureNavigationFallbackBottomInsetPx())
     }
 
     @Suppress("DEPRECATION")
     private fun legacySystemWindowInsetBottom(insets: WindowInsets): Int = insets.systemWindowInsetBottom
+
+    private fun gestureNavigationFallbackBottomInsetPx(): Int {
+        return if (isGestureNavigationMode()) dp(24) else 0
+    }
+
+    private fun isGestureNavigationMode(): Boolean {
+        val secureMode = secureNavigationMode()
+        if (secureMode >= 0) return secureMode == NAV_MODE_GESTURAL
+        val resourceMode = frameworkNavigationMode()
+        return resourceMode == NAV_MODE_GESTURAL
+    }
+
+    private fun secureNavigationMode(): Int {
+        return try {
+            Settings.Secure.getInt(contentResolver, "navigation_mode")
+        } catch (_: Exception) {
+            -1
+        }
+    }
+
+    private fun frameworkNavigationMode(): Int {
+        return try {
+            val id = resources.getIdentifier("config_navBarInteractionMode", "integer", "android")
+            if (id == 0) -1 else resources.getInteger(id)
+        } catch (_: Exception) {
+            -1
+        }
+    }
+
+    private fun keyboardViewSignature(nextLayout: KeyboardLayoutSettings): KeyboardViewSignature {
+        val info = currentInfo
+        return KeyboardViewSignature(
+            orientation = resources.configuration.orientation,
+            layout = nextLayout,
+            theme = theme,
+            inputType = info?.inputType ?: 0,
+            imeAction = (info?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION,
+            symbols = symbols
+        )
+    }
 
     private fun keyboardBackground(): Drawable? {
         val bitmap = backgroundBitmap() ?: return ColorDrawable(theme.bg)
@@ -2069,6 +2128,15 @@ class RetuiKeyboardService : InputMethodService() {
         val specialStyle: Boolean = false
     )
 
+    private data class KeyboardViewSignature(
+        val orientation: Int,
+        val layout: KeyboardLayoutSettings,
+        val theme: ThemeState,
+        val inputType: Int,
+        val imeAction: Int,
+        val symbols: Boolean
+    )
+
     private data class SuggestionChip(
         val label: String,
         val word: String,
@@ -2383,6 +2451,7 @@ class RetuiKeyboardService : InputMethodService() {
         private const val REPEAT_INTERVAL_MS = 42L
         private const val SHIFT_DOUBLE_TAP_MS = 360L
         private const val ACTIVE_ADD_WORD_MIN_LENGTH = 4
+        private const val NAV_MODE_GESTURAL = 2
         private const val ICON_BACKSPACE = "⌫"
         private const val ICON_CONTEXT = "⌘"
         private const val ICON_DONE = "✓"
