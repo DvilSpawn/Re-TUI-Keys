@@ -18,6 +18,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.InsetDrawable
 import android.inputmethodservice.InputMethodService
 import android.media.AudioManager
 import android.net.Uri
@@ -258,7 +259,6 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun populateSuggestionStrip(strip: LinearLayout) {
         val chips = suggestionChips()
-        val gap = dp(layout.keyGapDp + 1)
         chips.forEachIndexed { index, chip ->
             val view = (strip.getChildAt(index) as? TextView) ?: suggestionChipView().also {
                 strip.addView(it)
@@ -268,7 +268,6 @@ class RetuiKeyboardService : InputMethodService() {
             params.width = 0
             params.height = -1
             params.weight = chip.weight
-            params.setMargins(gap, 0, gap, 0)
             view.layoutParams = params
         }
         while (strip.childCount > chips.size) {
@@ -285,10 +284,12 @@ class RetuiKeyboardService : InputMethodService() {
         view.textSize = keyTextSize(chip.label).toFloat()
         view.gravity = Gravity.CENTER
         view.setTextColor(theme.keyText)
-        view.background = panel(
-            if (chip.action == SuggestionAction.ADD_WORD) brightenColor(theme.keyBg, 1.12f, 28) else theme.keyBg,
-            theme.border,
-            5
+        view.background = keyVisualInset(
+            panel(
+                if (chip.action == SuggestionAction.ADD_WORD) brightenColor(theme.keyBg, 1.12f, 28) else theme.keyBg,
+                theme.border,
+                5
+            )
         )
         bindImmediateKey(view, action = {
             when (chip.action) {
@@ -759,8 +760,6 @@ class RetuiKeyboardService : InputMethodService() {
         row.setPadding(dp(layout.keyGapDp), dp(1), dp(layout.keyGapDp), dp(1))
         for (key in keys) {
             val params = LinearLayout.LayoutParams(0, -1, key.weight)
-            val gap = dp(layout.keyGapDp)
-            params.setMargins(gap, gap, gap, gap)
             if (key.special == Special.SPACER) {
                 row.addView(View(this), params)
             } else {
@@ -796,8 +795,6 @@ class RetuiKeyboardService : InputMethodService() {
         cluster.gravity = Gravity.CENTER
         for (key in keys) {
             val params = LinearLayout.LayoutParams(0, -1, key.weight)
-            val gap = dp(layout.keyGapDp)
-            params.setMargins(gap, gap, gap, gap)
             if (key.special == Special.SPACER) {
                 cluster.addView(View(this), params)
             } else {
@@ -810,7 +807,6 @@ class RetuiKeyboardService : InputMethodService() {
     private fun addRailKey(parent: LinearLayout, label: String, action: () -> Unit) {
         val view = actionKey(label, action)
         val params = LinearLayout.LayoutParams(-1, 0, 1f)
-        params.setMargins(0, dp(layout.keyGapDp + 1), 0, dp(layout.keyGapDp + 1))
         parent.addView(view, params)
     }
 
@@ -1280,12 +1276,17 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun keyBackground(active: Boolean): Drawable {
-        return panel(keyFillColor(active), theme.border, 5)
+        return keyVisualInset(panel(keyFillColor(active), theme.border, 5))
     }
 
     private fun specialKeyBackground(active: Boolean): Drawable {
         val fill = specialKeyFillColor(active)
-        return panel(fill, theme.border, 5)
+        return keyVisualInset(panel(fill, theme.border, 5))
+    }
+
+    private fun keyVisualInset(drawable: Drawable): Drawable {
+        val inset = dp(layout.keyGapDp)
+        return if (inset <= 0) drawable else InsetDrawable(drawable, inset, inset, inset, inset)
     }
 
     private fun keyFillColor(active: Boolean): Int {
@@ -1421,7 +1422,9 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun commitFromKey(value: String) {
         val finishedWord = if (isWordBoundary(value)) currentWordBeforeCursor() else null
-        commit(value)
+        if (!sendTextKeyEventForMaskedField(value)) {
+            commit(value)
+        }
         learnFinishedWord(finishedWord)
         if (shifted && !capsLocked) {
             shifted = false
@@ -1474,7 +1477,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun backspace() {
-        if (hasLatchedModifiers()) {
+        if (hasLatchedModifiers() || shouldSendPlainKeyEventsForCurrentField()) {
             sendKeyCode(KeyEvent.KEYCODE_DEL)
             return
         }
@@ -1511,15 +1514,38 @@ class RetuiKeyboardService : InputMethodService() {
     ) {
         ic ?: return
         val metaState = latchedMetaState() or extraMetaState
-        val eventTime = SystemClock.uptimeMillis()
-        ic.sendKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN, keyCode, 0, metaState))
-        ic.sendKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP, keyCode, 0, metaState))
+        dispatchKeyCode(ic, keyCode, metaState)
         val clearedModifiers = clearLatchedModifiers()
         if (clearedModifiers) {
             setInputView(buildKeyboardView())
             return
         }
         refreshSuggestionStripSoon()
+    }
+
+    private fun sendTextKeyEventForMaskedField(value: String): Boolean {
+        if (!shouldSendPlainKeyEventsForCurrentField()) return false
+        val keyCode = keyCodeForText(value) ?: return false
+        val ic = currentInputConnection ?: return false
+        return dispatchKeyCode(ic, keyCode, 0)
+    }
+
+    private fun shouldSendPlainKeyEventsForCurrentField(): Boolean {
+        if (hasLatchedModifiers()) return false
+        val inputType = currentInfo?.inputType ?: return false
+        return when (inputType and InputType.TYPE_MASK_CLASS) {
+            InputType.TYPE_CLASS_NUMBER,
+            InputType.TYPE_CLASS_PHONE,
+            InputType.TYPE_CLASS_DATETIME -> true
+            else -> false
+        }
+    }
+
+    private fun dispatchKeyCode(ic: InputConnection, keyCode: Int, metaState: Int): Boolean {
+        val eventTime = SystemClock.uptimeMillis()
+        val downHandled = ic.sendKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN, keyCode, 0, metaState))
+        val upHandled = ic.sendKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP, keyCode, 0, metaState))
+        return downHandled || upHandled
     }
 
     private fun sendTextWithLatchedModifiers(value: String): Boolean {
