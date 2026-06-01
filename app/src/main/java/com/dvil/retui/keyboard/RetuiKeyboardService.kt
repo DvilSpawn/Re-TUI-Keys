@@ -378,6 +378,9 @@ class RetuiKeyboardService : InputMethodService() {
             densePortrait -> 36
             else -> 40
         }
+        if (!landscape && layout.showPortraitSpecialKeys) {
+            addKeyRow(parent, portraitSpecialKeyRow(), if (densePortrait) 28 else 30)
+        }
         if (symbols) {
             addKeyRow(parent, symbolRowOne(), keyHeight)
             addKeyRow(parent, symbolRowTwo(), keyHeight)
@@ -386,9 +389,6 @@ class RetuiKeyboardService : InputMethodService() {
             return
         }
 
-        if (!landscape && layout.showPortraitSpecialKeys) {
-            addKeyRow(parent, portraitSpecialKeyRow(), if (densePortrait) 28 else 30)
-        }
         if (layout.showNumberRow) {
             addKeyRow(parent, numberRow(), if (landscape) 26 else 28)
         }
