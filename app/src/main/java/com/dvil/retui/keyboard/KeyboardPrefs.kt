@@ -60,7 +60,7 @@ object KeyboardPrefs {
                 DEFAULT_BACKGROUND_IMAGE_OPACITY
             ).coerceIn(0, 100),
             backgroundImageUri = prefs.getString(KEY_BACKGROUND_IMAGE_URI, null)?.takeIf { it.isNotBlank() },
-            bottomMarginDp = prefs.getInt(KEY_BOTTOM_MARGIN_DP, legacyMargin).coerceIn(0, 64),
+            bottomMarginDp = prefs.getInt(KEY_BOTTOM_MARGIN_DP, legacyMargin).coerceIn(-64, 64),
             characterSizeSp = prefs.getInt(KEY_CHARACTER_SIZE_SP, DEFAULT_CHARACTER_SIZE_SP).coerceIn(10, 24),
             cornerRadiusDp = prefs.getInt(KEY_CORNER_RADIUS_DP, DEFAULT_CORNER_RADIUS_DP).coerceIn(0, 18),
             horizontalMarginDp = prefs.getInt(KEY_HORIZONTAL_MARGIN_DP, legacyMargin).coerceIn(0, 48),

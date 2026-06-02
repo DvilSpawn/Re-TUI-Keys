@@ -357,7 +357,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
             parent = list,
             label = getString(R.string.setting_bottom_margin),
             key = KeyboardPrefs.KEY_BOTTOM_MARGIN_DP,
-            min = 0,
+            min = -64,
             max = 64,
             defaultValue = KeyboardPrefs.DEFAULT_BOTTOM_MARGIN_DP,
             suffix = "dp"

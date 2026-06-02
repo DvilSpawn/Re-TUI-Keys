@@ -96,6 +96,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
     private var suggestionStrip: LinearLayout? = null
     private var pendingAddWord: String? = null
+    private var localWordBeforeCursor = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -208,6 +209,7 @@ class RetuiKeyboardService : InputMethodService() {
         makeImeWindowTransparent()
         layout = KeyboardPrefs.readLayout(prefs)
         lastKeyboardViewSignature = keyboardViewSignature(layout)
+        suggestionStrip = null
         return if (isLandscape()) buildLandscapeKeyboard() else buildPortraitKeyboard()
     }
 
@@ -1179,7 +1181,11 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun usesNumberPad(): Boolean {
-        val inputType = currentInfo?.inputType ?: return false
+        return usesNumberPad(currentInfo)
+    }
+
+    private fun usesNumberPad(info: EditorInfo?): Boolean {
+        val inputType = info?.inputType ?: return false
         return when (inputType and InputType.TYPE_MASK_CLASS) {
             InputType.TYPE_CLASS_NUMBER,
             InputType.TYPE_CLASS_PHONE,
@@ -1189,8 +1195,11 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun shouldOfferSuggestions(): Boolean {
-        val info = currentInfo ?: return layout.localSuggestions
-        return layout.localSuggestions && !usesNumberPad() && !isPasswordField(info)
+        return shouldOfferSuggestions(layout, currentInfo)
+    }
+
+    private fun shouldOfferSuggestions(settings: KeyboardLayoutSettings, info: EditorInfo?): Boolean {
+        return settings.localSuggestions && !usesNumberPad(info) && (info == null || !isPasswordField(info))
     }
 
     private fun isPasswordField(info: EditorInfo): Boolean {
@@ -1294,7 +1303,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun applyKeyboardRootPadding(view: View, sidePadding: Int, bottomPadding: Int, bottomInset: Int) {
-        view.setPadding(sidePadding, 0, sidePadding, bottomPadding + bottomInset)
+        view.setPadding(sidePadding, 0, sidePadding, max(0, bottomPadding + bottomInset))
     }
 
     private fun initialBottomSafeInsetPx(): Int {
@@ -1352,6 +1361,8 @@ class RetuiKeyboardService : InputMethodService() {
             theme = theme,
             inputType = info?.inputType ?: 0,
             imeAction = (info?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION,
+            usesNumberPad = usesNumberPad(info),
+            offersSuggestions = shouldOfferSuggestions(nextLayout, info),
             symbols = symbols
         )
     }
@@ -1601,6 +1612,7 @@ class RetuiKeyboardService : InputMethodService() {
         if (!sendTextKeyEventForMaskedField(value)) {
             commit(value)
         }
+        trackCommittedText(value)
         learnFinishedWord(finishedWord)
         if (shifted && !capsLocked) {
             shifted = false
@@ -1619,6 +1631,7 @@ class RetuiKeyboardService : InputMethodService() {
         }
         ic.commitText("$word ", 1)
         pendingAddWord = null
+        localWordBeforeCursor = ""
         LocalDictionary.recordAcceptedWord(prefs, word)
         if (shifted && !capsLocked) {
             shifted = false
@@ -1661,8 +1674,12 @@ class RetuiKeyboardService : InputMethodService() {
         val selected = ic.getSelectedText(0)
         if (!selected.isNullOrEmpty()) {
             ic.commitText("", 1)
+            localWordBeforeCursor = ""
         } else {
             ic.deleteSurroundingText(1, 0)
+            if (localWordBeforeCursor.isNotEmpty()) {
+                localWordBeforeCursor = localWordBeforeCursor.dropLast(1)
+            }
         }
         refreshSuggestionStripSoon()
     }
@@ -1674,6 +1691,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun enter() {
         val ic = currentInputConnection ?: return
         learnFinishedWord(currentWordBeforeCursor())
+        localWordBeforeCursor = ""
         val action = currentImeAction()
         if (action != EditorInfo.IME_ACTION_NONE && action != EditorInfo.IME_ACTION_UNSPECIFIED) {
             ic.performEditorAction(action)
@@ -1783,13 +1801,20 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun refreshSuggestionStrip() {
+        val offersSuggestions = shouldOfferSuggestions()
+        if (offersSuggestions != (suggestionStrip != null)) {
+            setInputView(buildKeyboardView())
+            return
+        }
         val strip = suggestionStrip ?: return
-        if (!shouldOfferSuggestions()) return
+        if (!offersSuggestions) return
         populateSuggestionStrip(strip)
     }
 
     private fun currentWordBeforeCursor(): String {
-        val text = currentInputConnection?.getTextBeforeCursor(64, 0)?.toString() ?: return ""
+        val text = currentInputConnection?.getTextBeforeCursor(64, 0)?.toString()
+            ?: return localWordBeforeCursor
+        if (text.isEmpty()) return localWordBeforeCursor
         var start = text.length
         while (start > 0 && isWordChar(text[start - 1])) {
             start--
@@ -1812,6 +1837,16 @@ class RetuiKeyboardService : InputMethodService() {
             start--
         }
         return text.substring(start, end).takeIf { it.isNotBlank() }
+    }
+
+    private fun trackCommittedText(value: String) {
+        value.forEach { char ->
+            localWordBeforeCursor = if (isWordChar(char)) {
+                (localWordBeforeCursor + char).takeLast(64)
+            } else {
+                ""
+            }
+        }
     }
 
     private fun isWordBoundary(value: String): Boolean {
@@ -1840,6 +1875,7 @@ class RetuiKeyboardService : InputMethodService() {
         metaLatched = false
         lastShiftTapAtMs = 0L
         pendingAddWord = null
+        localWordBeforeCursor = ""
     }
 
     private fun applyPrivateImeOptions(raw: String?) {
@@ -2274,6 +2310,8 @@ class RetuiKeyboardService : InputMethodService() {
         val theme: ThemeState,
         val inputType: Int,
         val imeAction: Int,
+        val usesNumberPad: Boolean,
+        val offersSuggestions: Boolean,
         val symbols: Boolean
     )
 
