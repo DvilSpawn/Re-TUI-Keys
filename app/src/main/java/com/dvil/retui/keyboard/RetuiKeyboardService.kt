@@ -1282,9 +1282,8 @@ class RetuiKeyboardService : InputMethodService() {
     private fun keyboardRoot(orientation: Int): LinearLayout {
         val root = LinearLayout(this)
         root.orientation = orientation
-        val landscape = isLandscape()
         val sidePadding = dp(layout.horizontalMarginDp)
-        val bottomPadding = if (landscape) 0 else dp(layout.bottomMarginDp)
+        val bottomPadding = dp(layout.bottomMarginDp)
         applyKeyboardRootPadding(root, sidePadding, bottomPadding, initialBottomSafeInsetPx())
         root.setOnApplyWindowInsetsListener { view, insets ->
             val bottomInset = systemBottomInset(insets)
@@ -1625,11 +1624,11 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun commitSuggestion(word: String) {
         val ic = currentInputConnection ?: return
-        val currentWord = currentWordBeforeCursor()
-        if (currentWord.isNotEmpty()) {
-            ic.deleteSurroundingText(currentWord.length, 0)
+        val currentWord = currentWordBeforeCursorContext()
+        if (currentWord.value.isNotEmpty() && !currentWord.fromLocalFallback) {
+            ic.deleteSurroundingText(currentWord.value.length, 0)
         }
-        ic.commitText("$word ", 1)
+        ic.commitText(suggestionCommitText(word, currentWord), 1)
         pendingAddWord = null
         localWordBeforeCursor = ""
         LocalDictionary.recordAcceptedWord(prefs, word)
@@ -1812,14 +1811,18 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun currentWordBeforeCursor(): String {
+        return currentWordBeforeCursorContext().value
+    }
+
+    private fun currentWordBeforeCursorContext(): CursorWord {
         val text = currentInputConnection?.getTextBeforeCursor(64, 0)?.toString()
-            ?: return localWordBeforeCursor
-        if (text.isEmpty()) return localWordBeforeCursor
+            ?: return CursorWord(localWordBeforeCursor, fromLocalFallback = localWordBeforeCursor.isNotEmpty())
+        if (text.isEmpty()) return CursorWord(localWordBeforeCursor, fromLocalFallback = localWordBeforeCursor.isNotEmpty())
         var start = text.length
         while (start > 0 && isWordChar(text[start - 1])) {
             start--
         }
-        return text.substring(start)
+        return CursorWord(text.substring(start), fromLocalFallback = false)
     }
 
     private fun previousWordBeforeCursor(): String? {
@@ -1847,6 +1850,12 @@ class RetuiKeyboardService : InputMethodService() {
                 ""
             }
         }
+    }
+
+    private fun suggestionCommitText(word: String, currentWord: CursorWord): String {
+        if (!currentWord.fromLocalFallback || currentWord.value.isEmpty()) return "$word "
+        if (!word.startsWith(currentWord.value, ignoreCase = true)) return "$word "
+        return "${word.drop(currentWord.value.length)} "
     }
 
     private fun isWordBoundary(value: String): Boolean {
@@ -2320,6 +2329,11 @@ class RetuiKeyboardService : InputMethodService() {
         val word: String,
         val action: SuggestionAction,
         val weight: Float
+    )
+
+    private data class CursorWord(
+        val value: String,
+        val fromLocalFallback: Boolean
     )
 
     private enum class SuggestionAction {
