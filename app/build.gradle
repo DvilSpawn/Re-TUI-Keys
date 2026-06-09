@@ -11,8 +11,8 @@ android {
         applicationId = "com.dvil.retui.keyboard"
         minSdk = 26
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.1.15"
+        versionCode = 17
+        versionName = "0.1.16"
     }
 
     buildTypes {
@@ -37,4 +37,7 @@ kotlin {
 
 dependencies {
     implementation("androidx.activity:activity:1.13.0")
+    implementation("androidx.core:core:1.17.0")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250517")
 }

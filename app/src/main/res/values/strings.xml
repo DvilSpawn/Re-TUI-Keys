@@ -28,10 +28,15 @@
     <string name="setting_sound_on_keypress_summary">Plays the system key click sound.</string>
     <string name="setting_local_suggestions">Local suggestions</string>
     <string name="setting_local_suggestions_summary">Shows offline word suggestions from this device only.</string>
+    <string name="setting_glide_typing">Glide typing</string>
+    <string name="setting_glide_typing_summary">Swipe across portrait letter keys to enter a local dictionary word.</string>
+    <string name="setting_glide_diagnostics">Glide diagnostics</string>
+    <string name="setting_glide_diagnostics_summary">Logs local glide traces and candidate rankings for tuning.</string>
     <string name="setting_learn_local_words">Learn local words</string>
     <string name="setting_learn_local_words_summary">Ranks saved custom words after you use them.</string>
     <string name="setting_dictionary_add_hint">word</string>
     <string name="setting_dictionary_edit">Edit user dictionary</string>
+    <string name="setting_glide_training">Glide training</string>
     <string name="setting_profile_backup">Backup keyboard profile</string>
     <string name="setting_profile_restore">Restore keyboard profile</string>
     <string name="setting_no_background">No background image</string>

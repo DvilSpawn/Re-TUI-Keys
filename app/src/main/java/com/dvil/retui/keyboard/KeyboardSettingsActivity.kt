@@ -26,6 +26,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowInsets
@@ -42,8 +43,15 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
+import org.json.JSONObject
+import java.io.File
 import java.io.OutputStreamWriter
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -432,6 +440,20 @@ class KeyboardSettingsActivity : ComponentActivity() {
         )
         addTerminalToggle(
             parent = list,
+            label = getString(R.string.setting_glide_typing),
+            summary = getString(R.string.setting_glide_typing_summary),
+            key = KeyboardPrefs.KEY_GLIDE_TYPING,
+            defaultValue = KeyboardPrefs.DEFAULT_GLIDE_TYPING
+        )
+        addTerminalToggle(
+            parent = list,
+            label = getString(R.string.setting_glide_diagnostics),
+            summary = getString(R.string.setting_glide_diagnostics_summary),
+            key = KeyboardPrefs.KEY_GLIDE_DIAGNOSTICS,
+            defaultValue = KeyboardPrefs.DEFAULT_GLIDE_DIAGNOSTICS
+        )
+        addTerminalToggle(
+            parent = list,
             label = getString(R.string.setting_learn_local_words),
             summary = getString(R.string.setting_learn_local_words_summary),
             key = KeyboardPrefs.KEY_LEARN_LOCAL_WORDS,
@@ -439,6 +461,9 @@ class KeyboardSettingsActivity : ComponentActivity() {
         )
 
         addSectionLabel(list, "DICTIONARY")
+        addCommandButton(list, getString(R.string.setting_glide_training)) {
+            showGlideTrainingSurface()
+        }
         addDictionaryControls(list)
 
         addSectionLabel(list, "THEME")
@@ -1058,6 +1083,330 @@ class KeyboardSettingsActivity : ComponentActivity() {
         val params = LinearLayout.LayoutParams(-1, dp(44))
         params.setMargins(0, dp(5), 0, dp(3))
         parent.addView(button, params)
+    }
+
+    private fun showGlideTrainingSurface() {
+        prefs.edit()
+            .putBoolean(KeyboardPrefs.KEY_GLIDE_TYPING, true)
+            .putBoolean(KeyboardPrefs.KEY_GLIDE_DIAGNOSTICS, true)
+            .apply()
+
+        val phrases = glideTrainingPhrases()
+        var index = prefs.getInt(GLIDE_TRAINING_INDEX_KEY, 0).coerceIn(0, phrases.size)
+
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.setPadding(dp(12), dp(22), dp(12), dp(10))
+        root.setBackgroundColor(theme.bg)
+
+        val title = terminalTab("GLIDE TRAINING", minWidthDp = 180)
+        root.addView(title, LinearLayout.LayoutParams(-2, dp(34)))
+
+        val progress = terminalLabel("", 13f, bold = true)
+        progress.setTextColor(theme.accent)
+        progress.setPadding(dp(2), dp(12), dp(2), dp(4))
+        root.addView(progress, LinearLayout.LayoutParams(-1, dp(42)))
+
+        val prompt = terminalLabel("", 22f, bold = true)
+        prompt.gravity = Gravity.CENTER
+        prompt.setTextColor(theme.text)
+        prompt.setPadding(dp(10), dp(10), dp(10), dp(10))
+        prompt.background = panelDrawable(
+            fill = theme.outputBg,
+            stroke = theme.border,
+            strokeDp = 1.2f,
+            radiusDp = theme.outputCornerRadiusDp,
+            notch = true
+        )
+        root.addView(prompt, LinearLayout.LayoutParams(-1, dp(92)))
+
+        val input = EditText(this)
+        input.typeface = Typeface.MONOSPACE
+        input.setSingleLine(true)
+        input.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        input.imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_FULLSCREEN
+        input.setTextColor(theme.accent)
+        input.setHintTextColor(withAlpha(theme.dim, 150))
+        input.textSize = 18f
+        input.setPadding(dp(12), 0, dp(12), 0)
+        input.background = panelDrawable(
+            fill = theme.inputBg,
+            stroke = withAlpha(theme.inputBorder, 190),
+            strokeDp = 1.1f,
+            radiusDp = theme.outputCornerRadiusDp,
+            notch = false
+        )
+        val inputParams = LinearLayout.LayoutParams(-1, dp(56))
+        inputParams.setMargins(0, dp(12), 0, dp(10))
+        root.addView(input, inputParams)
+        previewInput = input
+
+        fun render() {
+            if (index >= phrases.size) {
+                progress.text = "COMPLETE: ${phrases.size}/${phrases.size}"
+                prompt.text = "training complete"
+                input.setText("")
+                input.hint = "complete"
+                input.isEnabled = false
+            } else {
+                progress.text = "PHRASE ${index + 1} / ${phrases.size}"
+                prompt.text = phrases[index]
+                input.hint = "type phrase and press enter"
+                input.isEnabled = true
+            }
+        }
+
+        fun submit() {
+            if (index >= phrases.size) return
+            val expected = phrases[index]
+            val typed = input.text.toString().trim()
+            appendGlideTrainingResult(index, expected, typed)
+            index = (index + 1).coerceAtMost(phrases.size)
+            prefs.edit().putInt(GLIDE_TRAINING_INDEX_KEY, index).apply()
+            input.setText("")
+            render()
+        }
+
+        input.setOnEditorActionListener { _, actionId, event ->
+            val enterUp = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP
+            if (actionId == EditorInfo.IME_ACTION_DONE || enterUp) {
+                submit()
+                true
+            } else {
+                false
+            }
+        }
+
+        val actions = LinearLayout(this)
+        actions.orientation = LinearLayout.HORIZONTAL
+        actions.gravity = Gravity.CENTER
+        root.addView(actions, LinearLayout.LayoutParams(-1, dp(48)))
+
+        addInlineTrainingButton(actions, "SKIP") {
+            submit()
+        }
+        addInlineTrainingButton(actions, "RESET") {
+            index = 0
+            prefs.edit().putInt(GLIDE_TRAINING_INDEX_KEY, index).apply()
+            resetGlideTrainingLogs()
+            input.setText("")
+            render()
+        }
+
+        val exportActions = LinearLayout(this)
+        exportActions.orientation = LinearLayout.HORIZONTAL
+        exportActions.gravity = Gravity.CENTER
+        root.addView(exportActions, LinearLayout.LayoutParams(-1, dp(48)))
+
+        addInlineTrainingButton(exportActions, "EXPORT") {
+            shareGlideTrainingExport()
+        }
+        addInlineTrainingButton(exportActions, "CLEAR") {
+            resetGlideTrainingLogs()
+            Toast.makeText(this, "Glide test logs cleared", Toast.LENGTH_SHORT).show()
+        }
+        addInlineTrainingButton(exportActions, "CLOSE") {
+            setContentView(settingsView())
+            showPreviewKeyboard()
+        }
+
+        val note = terminalLabel(
+            "Offline logs stay local until EXPORT opens the Android share sheet.",
+            10f,
+            bold = false
+        )
+        note.setTextColor(theme.dim)
+        note.setPadding(dp(2), dp(10), dp(2), 0)
+        note.maxLines = 3
+        root.addView(note, LinearLayout.LayoutParams(-1, -2))
+
+        setContentView(root)
+        render()
+        input.requestFocus()
+        showPreviewKeyboard(delayMs = 120L)
+    }
+
+    private fun addInlineTrainingButton(parent: LinearLayout, label: String, action: () -> Unit) {
+        val button = terminalLabel(label, 12f, bold = true)
+        button.gravity = Gravity.CENTER
+        button.setTextColor(theme.text)
+        button.isClickable = true
+        button.isFocusable = true
+        button.background = panelDrawable(
+            fill = theme.actionBg,
+            stroke = theme.border,
+            strokeDp = 1f,
+            radiusDp = theme.moduleCornerRadiusDp,
+            notch = false
+        )
+        button.setOnClickListener { action() }
+        val params = LinearLayout.LayoutParams(0, dp(42), 1f)
+        params.setMargins(dp(3), 0, dp(3), 0)
+        parent.addView(button, params)
+    }
+
+    private fun appendGlideTrainingResult(index: Int, expected: String, typed: String) {
+        try {
+            val file = glideTrainingFile()
+            val payload = JSONObject()
+                .put("timestamp", System.currentTimeMillis())
+                .put("index", index)
+                .put("expected", expected)
+                .put("typed", typed)
+                .put("exact", normalizeTrainingText(expected) == normalizeTrainingText(typed))
+            file.appendText(payload.toString() + "\n")
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun glideTrainingFile(): File {
+        val root = getExternalFilesDir(null) ?: filesDir
+        val dir = File(root, "glide-diagnostics")
+        if (!dir.exists()) dir.mkdirs()
+        return File(dir, "glide-training.jsonl")
+    }
+
+    private fun glideDiagnosticsDir(): File {
+        val root = getExternalFilesDir(null) ?: filesDir
+        val dir = File(root, "glide-diagnostics")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    private fun resetGlideTrainingLogs() {
+        val dir = glideDiagnosticsDir()
+        listOf(
+            "glide-training.jsonl",
+            "glide-sessions.jsonl",
+            "glide-sessions.previous.jsonl"
+        ).forEach { name ->
+            File(dir, name).delete()
+        }
+    }
+
+    private fun shareGlideTrainingExport() {
+        try {
+            val zip = createGlideTrainingExport()
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", zip)
+            val intent = Intent(Intent.ACTION_SEND)
+                .setType("application/zip")
+                .putExtra(Intent.EXTRA_STREAM, uri)
+                .putExtra(Intent.EXTRA_SUBJECT, "Re:TUI Keyboard glide test results")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(Intent.createChooser(intent, "Share glide test results"))
+        } catch (error: Exception) {
+            Toast.makeText(this, "No glide test results to export", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun createGlideTrainingExport(): File {
+        val dir = glideDiagnosticsDir()
+        val exportDir = File(dir, "exports")
+        if (!exportDir.exists()) exportDir.mkdirs()
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        val zip = File(exportDir, "retui-glide-test-$stamp.zip")
+        val training = File(dir, "glide-training.jsonl")
+        val sessions = File(dir, "glide-sessions.jsonl")
+        val previousSessions = File(dir, "glide-sessions.previous.jsonl")
+        val available = listOf(training, sessions, previousSessions).filter { it.exists() && it.length() > 0L }
+        if (available.isEmpty()) error("No glide logs")
+
+        ZipOutputStream(zip.outputStream()).use { out ->
+            out.putTextEntry("README.txt", glideExportReadme())
+            out.putTextEntry("summary.txt", glideTrainingSummary(training))
+            available.forEach { file ->
+                out.putNextEntry(ZipEntry(file.name))
+                file.inputStream().use { input -> input.copyTo(out) }
+                out.closeEntry()
+            }
+        }
+        return zip
+    }
+
+    private fun ZipOutputStream.putTextEntry(name: String, value: String) {
+        putNextEntry(ZipEntry(name))
+        write(value.toByteArray(Charsets.UTF_8))
+        closeEntry()
+    }
+
+    private fun glideExportReadme(): String {
+        return buildString {
+            appendLine("Re:TUI Keyboard glide test export")
+            appendLine()
+            appendLine("This export is created offline from app-scoped files.")
+            appendLine("No network upload is performed by the keyboard.")
+            appendLine()
+            appendLine("Files:")
+            appendLine("- glide-training.jsonl: expected phrase, typed phrase, exact match flag")
+            appendLine("- glide-sessions.jsonl: local swipe traces, candidates, committed word, context words")
+            appendLine("- summary.txt: quick human-readable result summary")
+        }
+    }
+
+    private fun glideTrainingSummary(training: File): String {
+        if (!training.exists() || training.length() == 0L) return "No training records found.\n"
+        var total = 0
+        var exact = 0
+        val mismatches = mutableListOf<String>()
+        training.forEachLine { line ->
+            try {
+                val row = JSONObject(line)
+                total += 1
+                if (row.optBoolean("exact", false)) {
+                    exact += 1
+                } else {
+                    val expected = row.optString("expected")
+                    val typed = row.optString("typed")
+                    mismatches.add("expected: $expected\ntyped:    $typed")
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return buildString {
+            appendLine("Glide training summary")
+            appendLine()
+            appendLine("prompts: $total")
+            appendLine("exact: $exact")
+            appendLine("mismatches: ${total - exact}")
+            if (mismatches.isNotEmpty()) {
+                appendLine()
+                appendLine("Mismatches:")
+                mismatches.forEachIndexed { index, mismatch ->
+                    appendLine()
+                    appendLine("${index + 1}.")
+                    appendLine(mismatch)
+                }
+            }
+        }
+    }
+
+    private fun normalizeTrainingText(value: String): String {
+        return value.trim().lowercase(Locale.US).replace(Regex("\\s+"), " ")
+    }
+
+    private fun glideTrainingPhrases(): List<String> {
+        return listOf(
+            "hi how are you",
+            "hi how are things",
+            "how are you doing",
+            "what are you doing",
+            "are you there",
+            "are you free",
+            "good morning",
+            "good night",
+            "thank you",
+            "thanks for the update",
+            "i will check",
+            "i will send it",
+            "can you check this",
+            "open the settings",
+            "open keyboard settings",
+            "see you soon",
+            "talk to you later",
+            "i am working",
+            "we should test this",
+            "the app works"
+        )
     }
 
     private fun backgroundLabel(): String {
@@ -2500,6 +2849,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         private const val BAR_SEGMENTS = 16
         private const val CONTROL_REPEAT_INITIAL_DELAY_MS = 260L
         private const val CONTROL_REPEAT_INTERVAL_MS = 55L
+        private const val GLIDE_TRAINING_INDEX_KEY = "typing.glideTraining.v4.index"
         private const val THEME_OVERRIDE_PREFIX = "theme."
 
         private val SURFACE_BG = Color.rgb(2, 6, 4)

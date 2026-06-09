@@ -4,5 +4,6 @@ build/
 app/build/
 local.properties
 review-screenshots/
+glide-diagnostics/
 *.iml
 .DS_Store

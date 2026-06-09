@@ -14,6 +14,8 @@ object KeyboardPrefs {
     const val KEY_HORIZONTAL_MARGIN_DP = "layout.horizontalMarginDp"
     const val KEY_KEY_GAP_DP = "layout.keyGapDp"
     const val KEY_LANDSCAPE_HEIGHT_PERCENT = "layout.landscapeHeightPercent"
+    const val KEY_GLIDE_DIAGNOSTICS = "typing.glideDiagnostics"
+    const val KEY_GLIDE_TYPING = "typing.glideTyping"
     const val KEY_LEARN_LOCAL_WORDS = "typing.learnLocalWords"
     const val KEY_LEGACY_OUTER_MARGIN_DP = "layout.outerMarginDp"
     const val KEY_LOCAL_SUGGESTIONS = "typing.localSuggestions"
@@ -39,6 +41,8 @@ object KeyboardPrefs {
     const val DEFAULT_HORIZONTAL_MARGIN_DP = 4
     const val DEFAULT_KEY_GAP_DP = 2
     const val DEFAULT_LANDSCAPE_HEIGHT_PERCENT = 100
+    const val DEFAULT_GLIDE_DIAGNOSTICS = false
+    const val DEFAULT_GLIDE_TYPING = false
     const val DEFAULT_LEARN_LOCAL_WORDS = true
     const val DEFAULT_LOCAL_SUGGESTIONS = true
     const val DEFAULT_PORTRAIT_HEIGHT_PERCENT = DEFAULT_HEIGHT_PERCENT
@@ -69,6 +73,8 @@ object KeyboardPrefs {
                 KEY_LANDSCAPE_HEIGHT_PERCENT,
                 legacyHeight
             ).coerceIn(80, 180),
+            glideDiagnostics = prefs.getBoolean(KEY_GLIDE_DIAGNOSTICS, DEFAULT_GLIDE_DIAGNOSTICS),
+            glideTyping = prefs.getBoolean(KEY_GLIDE_TYPING, DEFAULT_GLIDE_TYPING),
             learnLocalWords = prefs.getBoolean(KEY_LEARN_LOCAL_WORDS, DEFAULT_LEARN_LOCAL_WORDS),
             localSuggestions = prefs.getBoolean(KEY_LOCAL_SUGGESTIONS, DEFAULT_LOCAL_SUGGESTIONS),
             portraitHeightPercent = prefs.getInt(
@@ -99,6 +105,8 @@ object KeyboardPrefs {
             .putInt(KEY_HORIZONTAL_MARGIN_DP, DEFAULT_HORIZONTAL_MARGIN_DP)
             .putInt(KEY_KEY_GAP_DP, DEFAULT_KEY_GAP_DP)
             .putInt(KEY_LANDSCAPE_HEIGHT_PERCENT, DEFAULT_LANDSCAPE_HEIGHT_PERCENT)
+            .putBoolean(KEY_GLIDE_DIAGNOSTICS, DEFAULT_GLIDE_DIAGNOSTICS)
+            .putBoolean(KEY_GLIDE_TYPING, DEFAULT_GLIDE_TYPING)
             .putBoolean(KEY_LEARN_LOCAL_WORDS, DEFAULT_LEARN_LOCAL_WORDS)
             .putBoolean(KEY_LOCAL_SUGGESTIONS, DEFAULT_LOCAL_SUGGESTIONS)
             .putInt(KEY_PORTRAIT_HEIGHT_PERCENT, DEFAULT_PORTRAIT_HEIGHT_PERCENT)
@@ -206,6 +214,8 @@ data class KeyboardLayoutSettings(
     val horizontalMarginDp: Int,
     val keyGapDp: Int,
     val landscapeHeightPercent: Int,
+    val glideDiagnostics: Boolean,
+    val glideTyping: Boolean,
     val learnLocalWords: Boolean,
     val localSuggestions: Boolean,
     val portraitHeightPercent: Int,

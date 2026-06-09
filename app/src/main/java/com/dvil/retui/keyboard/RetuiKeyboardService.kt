@@ -1,5 +1,6 @@
 package com.dvil.retui.keyboard
 
+import android.content.Context
 import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.content.Intent
@@ -45,6 +46,9 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.PopupWindow
 import android.widget.TextView
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -61,6 +65,8 @@ class RetuiKeyboardService : InputMethodService() {
         horizontalMarginDp = KeyboardPrefs.DEFAULT_HORIZONTAL_MARGIN_DP,
         keyGapDp = KeyboardPrefs.DEFAULT_KEY_GAP_DP,
         landscapeHeightPercent = KeyboardPrefs.DEFAULT_LANDSCAPE_HEIGHT_PERCENT,
+        glideDiagnostics = KeyboardPrefs.DEFAULT_GLIDE_DIAGNOSTICS,
+        glideTyping = KeyboardPrefs.DEFAULT_GLIDE_TYPING,
         learnLocalWords = KeyboardPrefs.DEFAULT_LEARN_LOCAL_WORDS,
         localSuggestions = KeyboardPrefs.DEFAULT_LOCAL_SUGGESTIONS,
         portraitHeightPercent = KeyboardPrefs.DEFAULT_PORTRAIT_HEIGHT_PERCENT,
@@ -97,6 +103,8 @@ class RetuiKeyboardService : InputMethodService() {
     private var suggestionStrip: LinearLayout? = null
     private var pendingAddWord: String? = null
     private var localWordBeforeCursor = ""
+    private val glideKeyHits = mutableListOf<GlideKeyHit>()
+    private var glideTrailView: GlideTrailView? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -210,6 +218,8 @@ class RetuiKeyboardService : InputMethodService() {
         layout = KeyboardPrefs.readLayout(prefs)
         lastKeyboardViewSignature = keyboardViewSignature(layout)
         suggestionStrip = null
+        glideKeyHits.clear()
+        glideTrailView = null
         return if (isLandscape()) buildLandscapeKeyboard() else buildPortraitKeyboard()
     }
 
@@ -231,7 +241,7 @@ class RetuiKeyboardService : InputMethodService() {
         } else {
             addTextRows(main, landscape = false)
         }
-        root.addView(main, LinearLayout.LayoutParams(-1, -2))
+        root.addView(glideLayer(main), LinearLayout.LayoutParams(-1, -2))
         return root
     }
 
@@ -257,6 +267,18 @@ class RetuiKeyboardService : InputMethodService() {
         body.orientation = LinearLayout.VERTICAL
         body.setPadding(dp(layout.keyGapDp), dp(layout.keyGapDp), dp(layout.keyGapDp), dp(layout.keyGapDp))
         return body
+    }
+
+    private fun glideLayer(main: LinearLayout): View {
+        if (!layout.glideTyping || isLandscape() || symbols || usesNumberPad()) return main
+        val frame = GlideLayerFrame(this)
+        frame.addView(main, FrameLayout.LayoutParams(-1, -2))
+        glideTrailView = GlideTrailView(this, theme.border, resources.displayMetrics.density).also { trail ->
+            trail.isClickable = false
+            trail.isFocusable = false
+            frame.addView(trail, FrameLayout.LayoutParams(-1, -1))
+        }
+        return frame
     }
 
     private fun suggestionStripView(): LinearLayout {
@@ -873,7 +895,13 @@ class RetuiKeyboardService : InputMethodService() {
         if (key.edgeAlias) {
             return edgeAliasKey(key)
         }
-        if (key.longText == null && key.longKeyCode == null && key.longSpecial == null && key.accentVariants.isEmpty()) {
+        if (
+            key.longText == null &&
+            key.longKeyCode == null &&
+            key.longSpecial == null &&
+            key.accentVariants.isEmpty() &&
+            !canGlideFromKey(key)
+        ) {
             return actionKey(
                 key.label,
                 action = { handleKey(key) },
@@ -890,6 +918,7 @@ class RetuiKeyboardService : InputMethodService() {
         val view = FrameLayout(this)
         view.background = keyBackground(active = false)
         bindLongPressKey(view, key)
+        registerGlideKey(view, key)
 
         view.addView(longPressLabelGroup(key), FrameLayout.LayoutParams(-2, -1, Gravity.CENTER))
 
@@ -899,6 +928,41 @@ class RetuiKeyboardService : InputMethodService() {
             "${key.label}, long press ${key.longLabel}"
         }
         return view
+    }
+
+    private fun canGlideFromKey(key: KeySpec): Boolean {
+        val text = key.text ?: return false
+        return layout.glideTyping &&
+            !isLandscape() &&
+            !symbols &&
+            !usesNumberPad() &&
+            !hasLatchedModifiers() &&
+            !isShiftActive() &&
+            key.special == null &&
+            text.length == 1 &&
+            text[0].isLetter()
+    }
+
+    private fun registerGlideKey(view: View, key: KeySpec) {
+        if (!canGlideFromKey(key)) return
+        val char = key.text?.singleOrNull()?.lowercaseChar() ?: return
+        view.addOnLayoutChangeListener { target, _, _, _, _, _, _, _, _ ->
+            val location = IntArray(2)
+            target.getLocationOnScreen(location)
+            val bounds = Rect(
+                location[0],
+                location[1],
+                location[0] + target.width,
+                location[1] + target.height
+            )
+            val existing = glideKeyHits.indexOfFirst { it.view == target }
+            val hit = GlideKeyHit(target, char, bounds)
+            if (existing >= 0) {
+                glideKeyHits[existing] = hit
+            } else {
+                glideKeyHits.add(hit)
+            }
+        }
     }
 
     private fun longPressLabelGroup(key: KeySpec): LinearLayout {
@@ -988,6 +1052,10 @@ class RetuiKeyboardService : InputMethodService() {
         var accentPopup: AccentPopup? = null
         var accentIndex = 0
         var downRawX = 0f
+        var downRawY = 0f
+        var glideTracking = false
+        val glideTrace = mutableListOf<Char>()
+        val glidePoints = mutableListOf<GlidePoint>()
         fun clearPopup() {
             popup?.dismiss()
             popup = null
@@ -1010,7 +1078,12 @@ class RetuiKeyboardService : InputMethodService() {
                     longPressHandled = false
                     primaryCommitted = false
                     accentIndex = 0
+	                    glideTracking = false
+	                    glideTrace.clear()
+	                    glidePoints.clear()
+	                    clearGlideTrail()
                     downRawX = event.rawX
+                    downRawY = event.rawY
                     touched.isPressed = true
                     pressFeedback(touched)
                     if (canCommitPrimaryOnDown(key)) {
@@ -1036,6 +1109,26 @@ class RetuiKeyboardService : InputMethodService() {
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    if (!longPressHandled && canGlideFromKey(key)) {
+                        if (!glideTracking && movedPastGlideThreshold(event.rawX, event.rawY, downRawX, downRawY)) {
+                            longPressRunnable?.let { repeatHandler.removeCallbacks(it) }
+                            longPressRunnable = null
+                            glideTracking = true
+	                            touched.isPressed = false
+	                            appendGlideHit(glideTrace, downRawX, downRawY)
+	                            appendGlidePoint(glidePoints, downRawX, downRawY)
+	                            beginGlideTrail(downRawX, downRawY)
+                            if (layout.vibrateOnKeypress) {
+                                vibrateKey(touched, HapticFeedbackConstants.KEYBOARD_TAP, durationMs = 6L)
+                            }
+                        }
+	                        if (glideTracking) {
+	                            appendGlideHit(glideTrace, event.rawX, event.rawY)
+	                            appendGlidePoint(glidePoints, event.rawX, event.rawY)
+	                            extendGlideTrail(event.rawX, event.rawY)
+                            return@setOnTouchListener true
+                        }
+                    }
                     if (longPressHandled && key.accentVariants.isNotEmpty()) {
                         updateAccentSelection(event.rawX)
                     }
@@ -1044,6 +1137,18 @@ class RetuiKeyboardService : InputMethodService() {
                 MotionEvent.ACTION_UP -> {
                     longPressRunnable?.let { repeatHandler.removeCallbacks(it) }
                     longPressRunnable = null
+	                    if (glideTracking) {
+	                        appendGlideHit(glideTrace, event.rawX, event.rawY)
+	                        appendGlidePoint(glidePoints, event.rawX, event.rawY)
+	                        extendGlideTrail(event.rawX, event.rawY)
+	                        touched.isPressed = false
+	                        commitGlideTrace(glideTrace, glidePoints)
+	                        finishGlideTrail()
+	                        glideTracking = false
+	                        glideTrace.clear()
+	                        glidePoints.clear()
+	                        true
+                    } else {
                     val selectedAccent = if (longPressHandled && key.accentVariants.isNotEmpty()) {
                         key.accentVariants.getOrNull(accentIndex)
                     } else {
@@ -1061,11 +1166,16 @@ class RetuiKeyboardService : InputMethodService() {
                         refreshSuggestionStripSoon()
                     }
                     true
+                    }
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     longPressRunnable?.let { repeatHandler.removeCallbacks(it) }
                     longPressRunnable = null
-                    clearPopup()
+	                    clearPopup()
+	                    glideTracking = false
+	                    glideTrace.clear()
+	                    glidePoints.clear()
+	                    clearGlideTrail()
                     touched.isPressed = false
                     true
                 }
@@ -1074,7 +1184,215 @@ class RetuiKeyboardService : InputMethodService() {
         }
     }
 
+    private fun movedPastGlideThreshold(rawX: Float, rawY: Float, downRawX: Float, downRawY: Float): Boolean {
+        val dx = rawX - downRawX
+        val dy = rawY - downRawY
+        val threshold = dpFloat(18f)
+        return (dx * dx) + (dy * dy) >= threshold * threshold
+    }
+
+    private fun appendGlideHit(trace: MutableList<Char>, rawX: Float, rawY: Float) {
+        val hit = glideKeyAt(rawX.toInt(), rawY.toInt()) ?: return
+        if (trace.isEmpty() || trace.last() != hit.char) {
+            trace.add(hit.char)
+        }
+    }
+
+    private fun appendGlidePoint(points: MutableList<GlidePoint>, rawX: Float, rawY: Float) {
+        val next = GlidePoint(rawX, rawY)
+        val last = points.lastOrNull()
+        if (last == null) {
+            points.add(next)
+            return
+        }
+        val dx = next.x - last.x
+        val dy = next.y - last.y
+        val minDistance = dpFloat(4f)
+        if ((dx * dx) + (dy * dy) >= minDistance * minDistance) {
+            points.add(next)
+        }
+    }
+
+    private fun glideKeyAt(rawX: Int, rawY: Int): GlideKeyHit? {
+        glideKeyHits.firstOrNull { it.bounds.contains(rawX, rawY) }?.let { return it }
+        return glideKeyHits
+            .map { hit ->
+                val centerX = hit.bounds.centerX()
+                val centerY = hit.bounds.centerY()
+                val dx = rawX - centerX
+                val dy = rawY - centerY
+                hit to ((dx * dx) + (dy * dy))
+            }
+            .filter { (_, distanceSquared) -> distanceSquared <= dp(44) * dp(44) }
+            .minByOrNull { (_, distanceSquared) -> distanceSquared }
+            ?.first
+    }
+
+    private fun glideKeyCenters(): Map<Char, GlidePoint> {
+        return glideKeyHits.associate { hit ->
+            hit.char to GlidePoint(hit.bounds.centerX().toFloat(), hit.bounds.centerY().toFloat())
+        }
+    }
+
+    private fun commitGlideTrace(trace: List<Char>, points: List<GlidePoint>) {
+        if (trace.size < 2) {
+            refreshSuggestionStripSoon()
+            return
+        }
+        val rawTrace = trace.joinToString(separator = "")
+        val keyCenters = glideKeyCenters()
+        val contextWords = previousWordsBeforeCursor(3)
+        val geometryCandidates = LocalDictionary.suggestGlideGeometry(
+            prefs = prefs,
+            points = points,
+            keyCenters = keyCenters,
+            rawTrace = rawTrace,
+            limit = 5,
+            previousWords = contextWords
+        )
+        val traceCandidates = if (rawTrace.length <= 5) {
+            LocalDictionary.suggestGlide(prefs, rawTrace, 5)
+        } else {
+            emptyList()
+        }
+        val geometrySuggestion = geometryCandidates.firstOrNull()
+        val suggestion = geometrySuggestion ?: traceCandidates.firstOrNull()
+        val fallbackTrace = if (rawTrace.length == 3) {
+            "${rawTrace.first()}${rawTrace.last()}"
+        } else {
+            rawTrace
+        }
+        val commitValue = suggestion
+            ?.takeIf { it.isNotBlank() }
+            ?.lowercase()
+            ?: fallbackTrace.takeIf { it.length in 2..3 }
+        if (commitValue.isNullOrBlank()) {
+            recordGlideDiagnostics(
+                rawTrace = rawTrace,
+                points = points,
+                keyCenters = keyCenters,
+                geometryCandidates = geometryCandidates,
+                traceCandidates = traceCandidates,
+                contextWords = contextWords,
+                committed = null,
+                source = "none"
+            )
+            refreshSuggestionStripSoon()
+            return
+        }
+        currentInputConnection?.commitText("$commitValue ", 1)
+        localWordBeforeCursor = ""
+        pendingAddWord = null
+        if (!suggestion.isNullOrBlank()) {
+            LocalDictionary.recordAcceptedWord(prefs, suggestion)
+        }
+        recordGlideDiagnostics(
+            rawTrace = rawTrace,
+            points = points,
+            keyCenters = keyCenters,
+            geometryCandidates = geometryCandidates,
+            traceCandidates = traceCandidates,
+            contextWords = contextWords,
+            committed = commitValue,
+            source = when {
+                geometrySuggestion != null -> "geometry"
+                suggestion != null -> "trace"
+                else -> "fallback"
+            }
+        )
+        refreshSuggestionStripSoon()
+    }
+
+    private fun recordGlideDiagnostics(
+        rawTrace: String,
+        points: List<GlidePoint>,
+        keyCenters: Map<Char, GlidePoint>,
+        geometryCandidates: List<String>,
+        traceCandidates: List<String>,
+        contextWords: List<String>,
+        committed: String?,
+        source: String
+    ) {
+        if (!layout.glideDiagnostics) return
+        try {
+            val file = glideDiagnosticsFile()
+            rotateGlideDiagnostics(file)
+            val payload = JSONObject()
+                .put("timestamp", System.currentTimeMillis())
+                .put("rawTrace", rawTrace)
+                .put("committed", committed ?: JSONObject.NULL)
+                .put("source", source)
+                .put("pointCount", points.size)
+                .put("geometryCandidates", JSONArray(geometryCandidates))
+                .put("traceCandidates", JSONArray(traceCandidates))
+                .put("contextWords", JSONArray(contextWords))
+                .put("points", glidePointArray(points))
+                .put("keyCenters", glideKeyCenterObject(keyCenters))
+            file.appendText(payload.toString() + "\n")
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun glideDiagnosticsFile(): File {
+        val root = getExternalFilesDir(null) ?: filesDir
+        val dir = File(root, "glide-diagnostics")
+        if (!dir.exists()) dir.mkdirs()
+        return File(dir, "glide-sessions.jsonl")
+    }
+
+    private fun rotateGlideDiagnostics(file: File) {
+        val maxBytes = 512 * 1024
+        if (file.exists() && file.length() > maxBytes) {
+            val previous = File(file.parentFile, "glide-sessions.previous.jsonl")
+            if (previous.exists()) previous.delete()
+            file.renameTo(previous)
+        }
+    }
+
+    private fun glidePointArray(points: List<GlidePoint>): JSONArray {
+        val out = JSONArray()
+        points.take(160).forEach { point ->
+            out.put(
+                JSONObject()
+                    .put("x", point.x.roundToInt())
+                    .put("y", point.y.roundToInt())
+            )
+        }
+        return out
+    }
+
+    private fun glideKeyCenterObject(keyCenters: Map<Char, GlidePoint>): JSONObject {
+        val out = JSONObject()
+        keyCenters.toSortedMap().forEach { (char, point) ->
+            out.put(
+                char.toString(),
+                JSONObject()
+                    .put("x", point.x.roundToInt())
+                    .put("y", point.y.roundToInt())
+            )
+        }
+        return out
+    }
+
+    private fun beginGlideTrail(rawX: Float, rawY: Float) {
+        glideTrailView?.beginRaw(rawX, rawY)
+    }
+
+    private fun extendGlideTrail(rawX: Float, rawY: Float) {
+        glideTrailView?.extendRaw(rawX, rawY)
+    }
+
+    private fun finishGlideTrail() {
+        val trail = glideTrailView ?: return
+        repeatHandler.postDelayed({ trail.clear() }, GLIDE_TRAIL_HOLD_MS)
+    }
+
+    private fun clearGlideTrail() {
+        glideTrailView?.clear()
+    }
+
     private fun canCommitPrimaryOnDown(key: KeySpec): Boolean {
+        if (canGlideFromKey(key)) return false
         return key.longSpecial == null &&
             key.text != null &&
             key.special == null &&
@@ -1842,6 +2160,28 @@ class RetuiKeyboardService : InputMethodService() {
         return text.substring(start, end).takeIf { it.isNotBlank() }
     }
 
+    private fun previousWordsBeforeCursor(limit: Int): List<String> {
+        val safeLimit = limit.coerceIn(1, 5)
+        val text = currentInputConnection?.getTextBeforeCursor(192, 0)?.toString()
+            ?: return if (localWordBeforeCursor.isNotBlank()) listOf(localWordBeforeCursor) else emptyList()
+        if (text.isBlank()) return emptyList()
+        val out = ArrayDeque<String>()
+        var index = text.length
+        while (index > 0 && out.size < safeLimit) {
+            while (index > 0 && !isWordChar(text[index - 1])) {
+                index--
+            }
+            val end = index
+            while (index > 0 && isWordChar(text[index - 1])) {
+                index--
+            }
+            if (end > index) {
+                out.addFirst(text.substring(index, end))
+            }
+        }
+        return out.toList()
+    }
+
     private fun trackCommittedText(value: String) {
         value.forEach { char ->
             localWordBeforeCursor = if (isWordChar(char)) {
@@ -2313,6 +2653,108 @@ class RetuiKeyboardService : InputMethodService() {
         }
     }
 
+    private class GlideLayerFrame(context: Context) : FrameLayout(context) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val width = MeasureSpec.getSize(widthMeasureSpec)
+            val body = getChildAt(0)
+            if (body == null) {
+                setMeasuredDimension(width, 0)
+                return
+            }
+            body.measure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+            val height = body.measuredHeight
+            for (index in 1 until childCount) {
+                getChildAt(index).measure(
+                    MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+                    MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY)
+                )
+            }
+            setMeasuredDimension(width, height)
+        }
+
+        override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+            for (index in 0 until childCount) {
+                getChildAt(index).layout(0, 0, right - left, bottom - top)
+            }
+        }
+    }
+
+    private class GlideTrailView(
+        context: Context,
+        private val strokeColor: Int,
+        density: Float
+    ) : View(context) {
+        private val location = IntArray(2)
+        private val points = mutableListOf<GlideTrailPoint>()
+        private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 10f * density
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            color = withAlpha(strokeColor, 70)
+        }
+        private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 3.2f * density
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            color = withAlpha(strokeColor, 230)
+        }
+
+        fun beginRaw(rawX: Float, rawY: Float) {
+            points.clear()
+            addRaw(rawX, rawY)
+        }
+
+        fun extendRaw(rawX: Float, rawY: Float) {
+            addRaw(rawX, rawY)
+        }
+
+        fun clear() {
+            if (points.isEmpty()) return
+            points.clear()
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            if (points.size < 2) return
+            val path = Path()
+            points.forEachIndexed { index, point ->
+                if (index == 0) {
+                    path.moveTo(point.x, point.y)
+                } else {
+                    path.lineTo(point.x, point.y)
+                }
+            }
+            canvas.drawPath(path, glowPaint)
+            canvas.drawPath(path, linePaint)
+        }
+
+        private fun addRaw(rawX: Float, rawY: Float) {
+            getLocationOnScreen(location)
+            val x = rawX - location[0]
+            val y = rawY - location[1]
+            val last = points.lastOrNull()
+            if (last != null) {
+                val dx = x - last.x
+                val dy = y - last.y
+                if ((dx * dx) + (dy * dy) < 16f) return
+            }
+            points.add(GlideTrailPoint(x, y))
+            invalidate()
+        }
+
+        private fun withAlpha(color: Int, alpha: Int): Int {
+            return Color.argb(alpha.coerceIn(0, 255), Color.red(color), Color.green(color), Color.blue(color))
+        }
+    }
+
+    private data class GlideTrailPoint(
+        val x: Float,
+        val y: Float
+    )
+
     private data class KeyboardViewSignature(
         val orientation: Int,
         val layout: KeyboardLayoutSettings,
@@ -2334,6 +2776,12 @@ class RetuiKeyboardService : InputMethodService() {
     private data class CursorWord(
         val value: String,
         val fromLocalFallback: Boolean
+    )
+
+    private data class GlideKeyHit(
+        val view: View,
+        val char: Char,
+        val bounds: Rect
     )
 
     private enum class SuggestionAction {
@@ -2642,6 +3090,7 @@ class RetuiKeyboardService : InputMethodService() {
         private const val REPEAT_INITIAL_DELAY_MS = 260L
         private const val REPEAT_INTERVAL_MS = 42L
         private const val SHIFT_DOUBLE_TAP_MS = 360L
+        private const val GLIDE_TRAIL_HOLD_MS = 180L
         private const val ACTIVE_ADD_WORD_MIN_LENGTH = 4
         private const val NAV_MODE_GESTURAL = 2
         private const val ICON_BACKSPACE = "⌫"

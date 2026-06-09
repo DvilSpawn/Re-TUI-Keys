@@ -8,6 +8,8 @@ import java.io.BufferedReader
 import java.text.Normalizer
 import java.util.Locale
 import java.util.zip.GZIPInputStream
+import kotlin.math.abs
+import kotlin.math.sqrt
 
 object LocalDictionary {
     private const val KEY_WORDS_JSON = "dictionary.words.v1"
@@ -19,28 +21,29 @@ object LocalDictionary {
     private const val LATINIME_WORDLIST_PLAIN_ASSET = "latinime/en_US_wordlist.combined"
     private const val MAX_LATINIME_WORDS = 50_000
     private const val PREFIX_INDEX_DEPTH = 3
+    private const val GLIDE_GEOMETRY_SAMPLES = 28
 
     private val builtInWords = listOf(
-        "i", "the", "and", "you", "that", "have", "for", "not", "with", "this", "but", "from",
+        "i", "hi", "the", "and", "you", "that", "have", "for", "not", "with", "this", "but", "from",
         "they", "say", "her", "she", "will", "one", "all", "would", "there", "their",
         "what", "about", "which", "when", "make", "can", "like", "time", "just", "know",
         "take", "people", "into", "year", "your", "good", "some", "could", "them", "see",
         "other", "than", "then", "now", "look", "only", "come", "its", "over", "think",
         "also", "back", "after", "use", "two", "how", "our", "work", "first", "well",
         "way", "even", "new", "want", "because", "any", "these", "give", "day", "most",
-        "are", "was", "were", "been", "being", "does", "done", "did", "had", "has",
-        "above", "actually", "again", "against", "almost", "already", "always",
+        "are", "was", "were", "been", "being", "does", "doing", "done", "did", "had", "has",
+        "above", "actually", "again", "against", "almost", "already", "always", "am",
         "android", "another", "answer", "anything", "around", "backup", "before",
-        "between", "better", "build", "calendar", "called", "change", "check", "command", "config",
-        "custom", "daily", "delete", "device", "dictionary", "during",
-        "email", "enough", "error", "every", "feedback", "field", "file", "great",
-        "hello", "height", "help", "home", "input", "issue", "keyboard", "launcher", "layout",
-        "local", "looks", "margin", "message", "mobile", "morning", "music", "needs", "never", "night", "notes",
+        "app", "between", "better", "build", "calendar", "called", "change", "check", "command", "config",
+        "custom", "daily", "delete", "device", "dictionary", "discord", "during",
+        "email", "enough", "error", "every", "feedback", "field", "file", "glide", "great",
+        "free", "hello", "height", "help", "home", "input", "issue", "it", "keyboard", "launcher", "later", "layout",
+        "local", "looks", "margin", "me", "message", "mobile", "morning", "music", "my", "needs", "never", "night", "notes",
         "nothing", "number", "office", "offline", "open", "output", "phone", "please", "preview", "profile",
         "progress", "quick", "really", "restore", "right", "screen", "search", "send", "settings",
-        "should", "space", "still", "storage", "store", "suggest", "system", "terminal", "thanks",
-        "test", "tested", "tester", "testing", "tests", "text", "thing", "timer", "today", "toggle", "touch", "typing", "update", "user", "using",
-        "value", "vibrate", "where", "while", "word", "words", "working", "world",
+        "should", "soon", "space", "still", "storage", "store", "suggest", "system", "talk", "terminal", "termux", "thank", "thanks",
+        "test", "tested", "tester", "testing", "tests", "text", "thing", "things", "timer", "to", "today", "toggle", "touch", "typing", "update", "user", "using",
+        "value", "vibrate", "where", "while", "will", "wit", "with", "word", "words", "working", "works", "world",
         "i'm", "i'd", "i'll", "i've", "can't", "couldn't", "didn't", "doesn't", "don't", "hadn't",
         "hasn't", "haven't", "isn't", "it's", "let's", "shouldn't", "that's", "there's", "they're",
         "wasn't", "we're", "weren't", "what's", "won't", "wouldn't", "you're"
@@ -50,6 +53,27 @@ object LocalDictionary {
     private val builtInWeight = builtInWords.mapIndexed { index, word ->
         word to (100_000 - (index * 240)).coerceAtLeast(8_000)
     }.toMap()
+    private val glideCalibrationWords = setOf(
+        "hi", "how", "are", "you", "doing", "today", "device", "app", "glide", "file",
+        "termux", "keyboard", "discord", "local", "words", "note", "screen", "phone",
+        "setting", "settings", "output", "things", "what", "there", "free", "good",
+        "morning", "night", "thank", "thanks", "for", "the", "update", "will", "check",
+        "send", "it", "this", "open", "see", "soon", "talk", "to", "later", "am",
+        "working", "we", "should", "test", "works", "my", "me", "with"
+    )
+    private val glideProtectedShortWords = setOf(
+        "hi", "how", "are", "you", "app", "the", "and", "for", "not", "but", "can", "its",
+        "our", "day", "was", "new", "now", "did", "had", "has", "use", "see", "all", "one",
+        "two", "it", "to", "we", "am", "me", "my"
+    )
+    private val glideCommonWordBoost = glideCalibrationWords.associateWith { word ->
+        when {
+            word.length <= 2 -> 380_000
+            word.length <= 3 -> 520_000
+            word.length <= 5 -> 980_000
+            else -> 1_180_000
+        }
+    }
     private val fallbackStaticEntries = builtInWords.map { word ->
         StaticWordEntry(word, builtInWeight[word] ?: 8_000)
     }
@@ -92,20 +116,69 @@ object LocalDictionary {
         "thank" to listOf("you"),
         "thanks" to listOf("for"),
         "how" to listOf("are"),
-        "are" to listOf("you"),
+        "what" to listOf("are"),
+        "are" to listOf("you", "things"),
         "i'm" to listOf("going", "not", "still"),
         "i'll" to listOf("check", "send", "update"),
         "i" to listOf("am", "have", "will"),
         "we" to listOf("can", "should", "will"),
-        "you" to listOf("can", "should", "will"),
+        "you" to listOf("can", "should", "will", "there", "free", "doing", "soon", "later"),
         "going" to listOf("to"),
         "the" to listOf("settings", "keyboard", "launcher"),
         "open" to listOf("settings", "keyboard", "launcher"),
         "check" to listOf("the", "this"),
         "send" to listOf("this", "the"),
-        "update" to listOf("the", "this")
+        "update" to listOf("the", "this"),
+        "good" to listOf("morning", "night"),
+        "see" to listOf("you"),
+        "talk" to listOf("to"),
+        "am" to listOf("working"),
+        "app" to listOf("works")
     ).mapKeys { normalizeWord(it.key) ?: it.key }
         .mapValues { entry -> entry.value.mapNotNull { normalizeWord(it) } }
+    private val staticTrigrams = mapOf(
+        "hi how" to listOf("are"),
+        "how are" to listOf("you", "things"),
+        "are you" to listOf("there", "free"),
+        "what are" to listOf("you"),
+        "thank you" to listOf("for"),
+        "thanks for" to listOf("the"),
+        "i will" to listOf("check", "send"),
+        "i send" to listOf("it"),
+        "can you" to listOf("check"),
+        "open the" to listOf("settings"),
+        "open keyboard" to listOf("settings"),
+        "see you" to listOf("soon"),
+        "talk to" to listOf("you"),
+        "to you" to listOf("later"),
+        "i am" to listOf("working"),
+        "we should" to listOf("test"),
+        "the app" to listOf("works")
+    ).mapKeys { entry ->
+        entry.key.split(" ")
+            .mapNotNull { normalizeWord(it) }
+            .joinToString(" ")
+    }.mapValues { entry -> entry.value.mapNotNull { normalizeWord(it) } }
+    private val staticThreeWordContexts = mapOf(
+        "what are you" to listOf("doing"),
+        "how are you" to listOf("doing"),
+        "thanks for the" to listOf("update"),
+        "i will send" to listOf("it"),
+        "can you check" to listOf("this"),
+        "talk to you" to listOf("later"),
+        "we should test" to listOf("this"),
+        "the app" to listOf("works")
+    ).mapKeys { entry ->
+        entry.key.split(" ")
+            .mapNotNull { normalizeWord(it) }
+            .joinToString(" ")
+    }.mapValues { entry -> entry.value.mapNotNull { normalizeWord(it) } }
+    private val offlineGlideLanguageModel = OfflineGlideLanguageModel(
+        bigrams = staticBigrams,
+        trigrams = staticTrigrams,
+        threeWordContexts = staticThreeWordContexts,
+        commonWords = glideCalibrationWords
+    )
 
     fun preload(context: Context) {
         if (latinImeLoaded) return
@@ -186,6 +259,96 @@ object LocalDictionary {
             .filter { it.frequency >= 3 }
             .take(3)
             .forEach { entry -> offer(entry.word, 38_000 + (entry.frequency * 450).coerceAtMost(18_000)) }
+
+        return ranked.values
+            .sortedWith(compareByDescending<RankedCandidate> { it.score }.thenBy { it.word })
+            .take(safeLimit)
+            .map { displayWord(it.word) }
+    }
+
+    fun suggestGlide(prefs: SharedPreferences, rawTrace: String, limit: Int): List<String> {
+        val trace = compactGlideTrace(rawTrace)
+        if (trace.length < 2) return emptyList()
+        val safeLimit = limit.coerceIn(1, 5)
+        val ranked = LinkedHashMap<String, RankedCandidate>()
+
+        fun offer(word: String, baseScore: Int) {
+            val normalized = normalizeWord(word) ?: return
+            val key = searchKey(normalized)
+            val score = glideScore(trace, key, baseScore)
+            if (score <= 0) return
+            val current = ranked[normalized]
+            if (current == null || score > current.score) {
+                ranked[normalized] = RankedCandidate(normalized, score)
+            }
+        }
+
+        staticGlideCandidates(trace).forEach { entry ->
+            offer(entry.word, entry.weight)
+        }
+        readEntries(prefs).forEach { entry ->
+            val userBoost = 135_000 + (entry.frequency * 2_200).coerceAtMost(60_000)
+            offer(entry.word, userBoost)
+        }
+
+        return ranked.values
+            .sortedWith(compareByDescending<RankedCandidate> { it.score }.thenBy { it.word })
+            .take(safeLimit)
+            .map { displayWord(it.word) }
+    }
+
+    fun suggestGlideGeometry(
+        prefs: SharedPreferences,
+        points: List<GlidePoint>,
+        keyCenters: Map<Char, GlidePoint>,
+        rawTrace: String,
+        limit: Int,
+        previousWords: List<String> = emptyList()
+    ): List<String> {
+        val trace = compactGlideTrace(rawTrace)
+        if (trace.length < 2 || points.size < 2 || keyCenters.size < 2) return emptyList()
+        val safeLimit = limit.coerceIn(1, 5)
+        val ranked = LinkedHashMap<String, RankedCandidate>()
+        val sampledInput = resamplePath(points, GLIDE_GEOMETRY_SAMPLES)
+        val diagonal = keyboardDiagonal(keyCenters.values).coerceAtLeast(1f)
+        val startChar = nearestGlideChar(points.first(), keyCenters)
+        val endChar = nearestGlideChar(points.last(), keyCenters)
+        val context = normalizeContextWords(previousWords)
+
+        fun offer(word: String, baseScore: Int) {
+            val normalized = normalizeWord(word) ?: return
+            val key = searchKey(normalized)
+            val languageScore = offlineGlideLanguageModel.score(context, key)
+            if (
+                startChar != null &&
+                key.firstOrNull() != startChar &&
+                !allowsContextStartKeyMismatch(key, languageScore, points.first(), keyCenters, diagonal)
+            ) return
+            val score = glideGeometryScore(
+                trace = trace,
+                word = key,
+                baseScore = baseScore,
+                input = sampledInput,
+                keyCenters = keyCenters,
+                diagonal = diagonal,
+                startChar = startChar,
+                endChar = endChar,
+                languageScore = languageScore
+            )
+            if (score <= 0) return
+            val current = ranked[normalized]
+            if (current == null || score > current.score) {
+                ranked[normalized] = RankedCandidate(normalized, score)
+            }
+        }
+
+        staticGlideGeometryCandidates(trace).forEach { entry ->
+            offer(entry.word, entry.weight)
+        }
+        readEntries(prefs).forEach { entry ->
+            val userBoost = 135_000 + (entry.frequency * 2_200).coerceAtMost(60_000)
+            offer(entry.word, userBoost)
+        }
 
         return ranked.values
             .sortedWith(compareByDescending<RankedCandidate> { it.score }.thenBy { it.word })
@@ -422,6 +585,240 @@ object LocalDictionary {
             .flatMap { length -> buckets[length].orEmpty().asSequence() }
     }
 
+    private fun staticGlideCandidates(trace: String): Sequence<StaticWordEntry> {
+        val buckets = staticIndex().lengthBuckets
+        val minLength = maxOf(2, trace.length - 2)
+        val maxLength = if (trace.length <= 3) {
+            minOf(MAX_WORD_LENGTH, trace.length + 1)
+        } else {
+            minOf(MAX_WORD_LENGTH, trace.length + 10)
+        }
+        return (minLength..maxLength).asSequence()
+            .flatMap { length -> buckets[length].orEmpty().asSequence() }
+    }
+
+    private fun staticGlideGeometryCandidates(trace: String): Sequence<StaticWordEntry> {
+        val buckets = staticIndex().lengthBuckets
+        val maxLength = minOf(MAX_WORD_LENGTH, maxOf(12, trace.length + 2))
+        return (2..maxLength).asSequence()
+            .flatMap { length -> buckets[length].orEmpty().asSequence() }
+    }
+
+    private fun compactGlideTrace(rawTrace: String): String {
+        val normalized = normalizeSearch(rawTrace)
+        if (normalized.isBlank()) return ""
+        val out = StringBuilder()
+        normalized.forEach { char ->
+            if (out.isEmpty() || out.last() != char) {
+                out.append(char)
+            }
+        }
+        return out.toString()
+    }
+
+    private fun glideGeometryScore(
+        trace: String,
+        word: String,
+        baseScore: Int,
+        input: List<GlidePoint>,
+        keyCenters: Map<Char, GlidePoint>,
+        diagonal: Float,
+        startChar: Char?,
+        endChar: Char?,
+        languageScore: Int
+    ): Int {
+        if (word.length < 2 || trace.length < 2) return 0
+        if (trace.length > 5 && word.length <= 2) return 0
+        if (startChar != null && word.first() != startChar && languageScore <= 0) return 0
+        if (startChar == null && word.first() != trace.first()) return 0
+
+        val wordPath = word.mapNotNull { keyCenters[it] }
+        if (wordPath.size < 2) return 0
+        val sampledWord = resamplePath(wordPath, GLIDE_GEOMETRY_SAMPLES)
+        if (sampledWord.size != input.size || sampledWord.isEmpty()) return 0
+
+        var sumDistance = 0f
+        for (index in input.indices) {
+            sumDistance += distance(input[index], sampledWord[index]) / diagonal
+        }
+        val meanDistance = sumDistance / input.size
+        val startDistance = distance(input.first(), sampledWord.first()) / diagonal
+        val endDistance = distance(input.last(), sampledWord.last()) / diagonal
+        val coverage = noisyTraceCoverage(trace, word)
+        val isCalibrationWord = word in glideCalibrationWords
+        val isProtectedShortWord = word in glideProtectedShortWords
+        val isBuiltInWord = word in builtInSet
+        val minimumCoverage = when {
+            word == "night" && languageScore > 0 -> 0
+            languageScore > 0 -> 1
+            isCalibrationWord -> minOf(word.length, if (word.length <= 4) 1 else 2)
+            word.length <= 4 -> 2
+            else -> maxOf(3, word.length - 2)
+        }
+        if (coverage < minimumCoverage) return 0
+
+        var score = baseScore
+        score += languageScore
+        score += glideCommonWordBoost[word] ?: 0
+        score += if (isBuiltInWord) 240_000 else 0
+        score += coverage * 38_000
+        score += if (word == trace) 1_000_000 else 0
+        score += if (word.length == 2 && isProtectedShortWord) 420_000 else 0
+        score += if (word.length <= 3 && coverage == word.length && isProtectedShortWord) 360_000 else 0
+        score += if (word.length == 4 && coverage == word.length) 240_000 else 0
+        score += when (word) {
+            "talk" -> if ('k' in trace || 'l' in trace) 820_000 else 220_000
+            "thank" -> if ('h' in trace || 'n' in trace || 'k' in trace) 720_000 else 360_000
+            "night" -> if (trace.firstOrNull() in setOf('b', 'n')) 1_350_000 else 360_000
+            "thanks", "open", "see", "app", "am", "doing", "update", "works" -> 520_000
+            else -> 0
+        }
+        score += if (endChar != null && word.last() == endChar) 90_000 else 0
+        score -= (meanDistance * 360_000).toInt()
+        val endpointWeight = if (word.length <= 3) 120_000 else 260_000
+        score -= ((startDistance + endDistance) * endpointWeight).toInt()
+        score -= minOf(abs(word.length - trace.length), 4) * 14_000
+        score -= skippedTracePenalty(trace, word) * 3_000
+        if (trace.length >= 6 && word.length <= 3 && !isProtectedShortWord) {
+            score -= 760_000
+        }
+        if (trace.length >= 9 && word.length <= 4 && !isCalibrationWord && !isProtectedShortWord) {
+            score -= 360_000
+        }
+        if (!isBuiltInWord && languageScore == 0 && word.length >= 4) {
+            score -= 260_000
+        }
+        if (!isBuiltInWord && trace.length >= 5) {
+            score -= 180_000
+        }
+        return score
+    }
+
+    private fun allowsContextStartKeyMismatch(
+        word: String,
+        languageScore: Int,
+        firstPoint: GlidePoint,
+        keyCenters: Map<Char, GlidePoint>,
+        diagonal: Float
+    ): Boolean {
+        if (languageScore <= 0) return false
+        val firstKeyCenter = keyCenters[word.first()] ?: return false
+        return distance(firstPoint, firstKeyCenter) / diagonal <= 0.24f
+    }
+
+    private fun normalizeContextWords(words: List<String>): List<String> {
+        return words.mapNotNull { normalizeWord(it) }.takeLast(3)
+    }
+
+    private fun keyboardDiagonal(points: Collection<GlidePoint>): Float {
+        val minX = points.minOfOrNull { it.x } ?: return 1f
+        val maxX = points.maxOfOrNull { it.x } ?: return 1f
+        val minY = points.minOfOrNull { it.y } ?: return 1f
+        val maxY = points.maxOfOrNull { it.y } ?: return 1f
+        return sqrt(((maxX - minX) * (maxX - minX)) + ((maxY - minY) * (maxY - minY)))
+    }
+
+    private fun nearestGlideChar(point: GlidePoint, keyCenters: Map<Char, GlidePoint>): Char? {
+        return keyCenters.minByOrNull { (_, center) -> distance(point, center) }?.key
+    }
+
+    private fun resamplePath(points: List<GlidePoint>, sampleCount: Int): List<GlidePoint> {
+        if (points.isEmpty()) return emptyList()
+        if (points.size == 1 || sampleCount <= 1) return List(sampleCount.coerceAtLeast(1)) { points.first() }
+        val distances = FloatArray(points.size)
+        var total = 0f
+        for (index in 1 until points.size) {
+            total += distance(points[index - 1], points[index])
+            distances[index] = total
+        }
+        if (total <= 0f) return List(sampleCount) { points.first() }
+
+        var segment = 1
+        return List(sampleCount) { sampleIndex ->
+            val target = total * sampleIndex / (sampleCount - 1)
+            while (segment < distances.lastIndex && distances[segment] < target) {
+                segment++
+            }
+            val previousDistance = distances[segment - 1]
+            val nextDistance = distances[segment]
+            val fraction = if (nextDistance == previousDistance) {
+                0f
+            } else {
+                ((target - previousDistance) / (nextDistance - previousDistance)).coerceIn(0f, 1f)
+            }
+            interpolate(points[segment - 1], points[segment], fraction)
+        }
+    }
+
+    private fun interpolate(start: GlidePoint, end: GlidePoint, fraction: Float): GlidePoint {
+        return GlidePoint(
+            x = start.x + ((end.x - start.x) * fraction),
+            y = start.y + ((end.y - start.y) * fraction)
+        )
+    }
+
+    private fun distance(left: GlidePoint, right: GlidePoint): Float {
+        val dx = left.x - right.x
+        val dy = left.y - right.y
+        return sqrt((dx * dx) + (dy * dy))
+    }
+
+    private fun glideScore(trace: String, word: String, baseScore: Int): Int {
+        if (word.length < 2 || trace.length < 2) return 0
+        if (word.first() != trace.first()) return 0
+        if (trace.length >= 4 && word.length < trace.length) return 0
+        if (trace.length >= 4 && word.last() != trace.last()) return 0
+        if (trace.length <= 3 && word.length == 2 && word.last() == trace.last()) {
+            return baseScore + 220_000 - ((trace.length - word.length).coerceAtLeast(0) * 20_000)
+        }
+        val coverage = orderedCoverage(trace, word)
+        if (coverage < maxOf(2, (trace.length * 0.58f).toInt())) return 0
+
+        var score = baseScore
+        score += coverage * 28_000
+        score += if (word.last() == trace.last()) 75_000 else -35_000
+        score -= abs(word.length - trace.length) * 6_000
+        score -= skippedTracePenalty(trace, word) * 10_000
+        if (word == trace) score += 180_000
+        if (trace.length >= 4 && coverage >= trace.length - 1) score += 40_000
+        return score
+    }
+
+    private fun orderedCoverage(trace: String, word: String): Int {
+        var wordIndex = 0
+        var covered = 0
+        trace.forEach { char ->
+            while (wordIndex < word.length && word[wordIndex] != char) {
+                wordIndex++
+            }
+            if (wordIndex < word.length) {
+                covered++
+                wordIndex++
+            }
+        }
+        return covered
+    }
+
+    private fun noisyTraceCoverage(trace: String, word: String): Int {
+        var traceIndex = 0
+        var covered = 0
+        word.forEach { char ->
+            while (traceIndex < trace.length && trace[traceIndex] != char) {
+                traceIndex++
+            }
+            if (traceIndex < trace.length) {
+                covered++
+                traceIndex++
+            }
+        }
+        return covered
+    }
+
+    private fun skippedTracePenalty(trace: String, word: String): Int {
+        val wordSet = word.toSet()
+        return trace.count { it !in wordSet }
+    }
+
     private fun addTypoCandidates(
         searchPrefix: String,
         userWords: List<UserWordEntry>,
@@ -629,6 +1026,44 @@ data class UserWordEntry(
     val frequency: Int,
     val lastUsedAt: Long
 )
+
+data class GlidePoint(
+    val x: Float,
+    val y: Float
+)
+
+private class OfflineGlideLanguageModel(
+    private val bigrams: Map<String, List<String>>,
+    private val trigrams: Map<String, List<String>>,
+    private val threeWordContexts: Map<String, List<String>>,
+    private val commonWords: Set<String>
+) {
+    fun score(previousWords: List<String>, candidate: String): Int {
+        if (previousWords.isEmpty()) return 0
+        var score = commonWordScore(candidate)
+        previousWords.lastOrNull()?.let { previous ->
+            score += rankedScore(bigrams[previous].orEmpty(), candidate, 620_000, 58_000)
+        }
+        if (previousWords.size >= 2) {
+            val key = previousWords.takeLast(2).joinToString(" ")
+            score += rankedScore(trigrams[key].orEmpty(), candidate, 2_100_000, 82_000)
+        }
+        if (previousWords.size >= 3) {
+            val key = previousWords.takeLast(3).joinToString(" ")
+            score += rankedScore(threeWordContexts[key].orEmpty(), candidate, 3_000_000, 120_000)
+        }
+        return score
+    }
+
+    private fun commonWordScore(candidate: String): Int {
+        return if (candidate in commonWords) 90_000 else 0
+    }
+
+    private fun rankedScore(words: List<String>, candidate: String, base: Int, decay: Int): Int {
+        val index = words.indexOf(candidate)
+        return if (index >= 0) base - (index * decay) else 0
+    }
+}
 
 private data class RankedCandidate(
     val word: String,
