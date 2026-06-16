@@ -17,6 +17,8 @@ object KeyboardProfileBackup {
         KeyboardPrefs.KEY_HORIZONTAL_MARGIN_DP,
         KeyboardPrefs.KEY_KEY_GAP_DP,
         KeyboardPrefs.KEY_LANDSCAPE_HEIGHT_PERCENT,
+        KeyboardPrefs.KEY_DELETE_WHOLE_WORD,
+        KeyboardPrefs.KEY_DOUBLE_SPACE_PERIOD,
         KeyboardPrefs.KEY_LEARN_LOCAL_WORDS,
         KeyboardPrefs.KEY_LEGACY_OUTER_MARGIN_DP,
         KeyboardPrefs.KEY_LOCAL_SUGGESTIONS,

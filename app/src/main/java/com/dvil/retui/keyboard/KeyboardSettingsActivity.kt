@@ -1,5 +1,6 @@
 package com.dvil.retui.keyboard
 
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -440,6 +441,20 @@ class KeyboardSettingsActivity : ComponentActivity() {
         )
         addTerminalToggle(
             parent = list,
+            label = getString(R.string.setting_delete_whole_word),
+            summary = getString(R.string.setting_delete_whole_word_summary),
+            key = KeyboardPrefs.KEY_DELETE_WHOLE_WORD,
+            defaultValue = KeyboardPrefs.DEFAULT_DELETE_WHOLE_WORD
+        )
+        addTerminalToggle(
+            parent = list,
+            label = getString(R.string.setting_double_space_period),
+            summary = getString(R.string.setting_double_space_period_summary),
+            key = KeyboardPrefs.KEY_DOUBLE_SPACE_PERIOD,
+            defaultValue = KeyboardPrefs.DEFAULT_DOUBLE_SPACE_PERIOD
+        )
+        addTerminalToggle(
+            parent = list,
             label = getString(R.string.setting_glide_typing),
             summary = getString(R.string.setting_glide_typing_summary),
             key = KeyboardPrefs.KEY_GLIDE_TYPING,
@@ -575,9 +590,17 @@ class KeyboardSettingsActivity : ComponentActivity() {
 
         row.setOnClickListener {
             val next = !enabled
-            prefs.edit().putBoolean(key, next).apply()
-            render(next)
-            refreshKeyboard()
+            if (key == KeyboardPrefs.KEY_GLIDE_TYPING && next) {
+                showGlideTypingWarning {
+                    prefs.edit().putBoolean(key, true).apply()
+                    render(true)
+                    refreshKeyboard()
+                }
+            } else {
+                prefs.edit().putBoolean(key, next).apply()
+                render(next)
+                refreshKeyboard()
+            }
         }
         render(enabled)
     }
@@ -1085,7 +1108,28 @@ class KeyboardSettingsActivity : ComponentActivity() {
         parent.addView(button, params)
     }
 
+    private fun showGlideTypingWarning(onAccepted: () -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.setting_glide_typing_warning_title)
+            .setMessage(R.string.setting_glide_typing_warning_message)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.setting_glide_typing_warning_enable) { _, _ ->
+                onAccepted()
+            }
+            .show()
+    }
+
     private fun showGlideTrainingSurface() {
+        if (!prefs.getBoolean(KeyboardPrefs.KEY_GLIDE_TYPING, KeyboardPrefs.DEFAULT_GLIDE_TYPING)) {
+            showGlideTypingWarning {
+                showGlideTrainingSurfaceAfterWarning()
+            }
+            return
+        }
+        showGlideTrainingSurfaceAfterWarning()
+    }
+
+    private fun showGlideTrainingSurfaceAfterWarning() {
         prefs.edit()
             .putBoolean(KeyboardPrefs.KEY_GLIDE_TYPING, true)
             .putBoolean(KeyboardPrefs.KEY_GLIDE_DIAGNOSTICS, true)

@@ -28,8 +28,15 @@
     <string name="setting_sound_on_keypress_summary">Plays the system key click sound.</string>
     <string name="setting_local_suggestions">Local suggestions</string>
     <string name="setting_local_suggestions_summary">Shows offline word suggestions from this device only.</string>
+    <string name="setting_delete_whole_word">Delete whole word</string>
+    <string name="setting_delete_whole_word_summary">Backspace removes the word before the cursor when possible.</string>
+    <string name="setting_double_space_period">Double-space period</string>
+    <string name="setting_double_space_period_summary">Press space twice after a word to replace the first space with a period.</string>
     <string name="setting_glide_typing">Glide typing</string>
     <string name="setting_glide_typing_summary">Swipe across portrait letter keys to enter a local dictionary word.</string>
+    <string name="setting_glide_typing_warning_title">Glide typing is experimental</string>
+    <string name="setting_glide_typing_warning_message">Glide typing is in very early development and will not be a reliable daily driver yet. It can choose the wrong words, especially outside training prompts. Keep it off unless you want to test it.</string>
+    <string name="setting_glide_typing_warning_enable">Enable anyway</string>
     <string name="setting_glide_diagnostics">Glide diagnostics</string>
     <string name="setting_glide_diagnostics_summary">Logs local glide traces and candidate rankings for tuning.</string>
     <string name="setting_learn_local_words">Learn local words</string>

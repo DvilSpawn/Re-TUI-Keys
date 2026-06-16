@@ -237,6 +237,56 @@ class LocalDictionaryGlideTest {
         )
     }
 
+    @Test
+    fun geometryGlideRanksLatestTrainingCorrections() {
+        val prefs = prefsWithWords()
+        val centers = qwertyCenters()
+
+        assertEquals(
+            "you",
+            LocalDictionary.suggestGlideGeometry(
+                prefs = prefs,
+                points = "yuiuyt".map { centers.getValue(it) },
+                keyCenters = centers,
+                rawTrace = "yuiuyt",
+                limit = 5,
+                previousWords = listOf("how", "are")
+            ).firstOrNull()
+        )
+        assertEquals(
+            "morning",
+            LocalDictionary.suggestGlideGeometry(
+                prefs = prefs,
+                points = "njiuhgfgvhyuhvgf".map { centers.getValue(it) },
+                keyCenters = centers,
+                rawTrace = "njiuhgfgvhyuhvgf",
+                limit = 5,
+                previousWords = listOf("good")
+            ).firstOrNull()
+        )
+        assertEquals(
+            "thank",
+            LocalDictionary.suggestGlideGeometry(
+                prefs = prefs,
+                points = "tyhgfdsdfvbjk".map { centers.getValue(it) },
+                keyCenters = centers,
+                rawTrace = "tyhgfdsdfvbjk",
+                limit = 5
+            ).firstOrNull()
+        )
+        assertEquals(
+            "it",
+            LocalDictionary.suggestGlideGeometry(
+                prefs = prefs,
+                points = "iuygtrf".map { centers.getValue(it) },
+                keyCenters = centers,
+                rawTrace = "iuygtrf",
+                limit = 5,
+                previousWords = listOf("i", "will", "send")
+            ).firstOrNull()
+        )
+    }
+
     @org.junit.Ignore("Calibration fixture from a real session; use for offline tuning, not as a release gate.")
     @Test
     fun geometryGlideRanksPulledPhraseSession() {

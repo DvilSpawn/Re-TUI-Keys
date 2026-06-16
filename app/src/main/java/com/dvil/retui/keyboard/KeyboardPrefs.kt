@@ -16,6 +16,8 @@ object KeyboardPrefs {
     const val KEY_LANDSCAPE_HEIGHT_PERCENT = "layout.landscapeHeightPercent"
     const val KEY_GLIDE_DIAGNOSTICS = "typing.glideDiagnostics"
     const val KEY_GLIDE_TYPING = "typing.glideTyping"
+    const val KEY_DELETE_WHOLE_WORD = "typing.deleteWholeWord"
+    const val KEY_DOUBLE_SPACE_PERIOD = "typing.doubleSpacePeriod"
     const val KEY_LEARN_LOCAL_WORDS = "typing.learnLocalWords"
     const val KEY_LEGACY_OUTER_MARGIN_DP = "layout.outerMarginDp"
     const val KEY_LOCAL_SUGGESTIONS = "typing.localSuggestions"
@@ -43,6 +45,8 @@ object KeyboardPrefs {
     const val DEFAULT_LANDSCAPE_HEIGHT_PERCENT = 100
     const val DEFAULT_GLIDE_DIAGNOSTICS = false
     const val DEFAULT_GLIDE_TYPING = false
+    const val DEFAULT_DELETE_WHOLE_WORD = false
+    const val DEFAULT_DOUBLE_SPACE_PERIOD = false
     const val DEFAULT_LEARN_LOCAL_WORDS = true
     const val DEFAULT_LOCAL_SUGGESTIONS = true
     const val DEFAULT_PORTRAIT_HEIGHT_PERCENT = DEFAULT_HEIGHT_PERCENT
@@ -75,6 +79,8 @@ object KeyboardPrefs {
             ).coerceIn(80, 180),
             glideDiagnostics = prefs.getBoolean(KEY_GLIDE_DIAGNOSTICS, DEFAULT_GLIDE_DIAGNOSTICS),
             glideTyping = prefs.getBoolean(KEY_GLIDE_TYPING, DEFAULT_GLIDE_TYPING),
+            deleteWholeWord = prefs.getBoolean(KEY_DELETE_WHOLE_WORD, DEFAULT_DELETE_WHOLE_WORD),
+            doubleSpacePeriod = prefs.getBoolean(KEY_DOUBLE_SPACE_PERIOD, DEFAULT_DOUBLE_SPACE_PERIOD),
             learnLocalWords = prefs.getBoolean(KEY_LEARN_LOCAL_WORDS, DEFAULT_LEARN_LOCAL_WORDS),
             localSuggestions = prefs.getBoolean(KEY_LOCAL_SUGGESTIONS, DEFAULT_LOCAL_SUGGESTIONS),
             portraitHeightPercent = prefs.getInt(
@@ -107,6 +113,8 @@ object KeyboardPrefs {
             .putInt(KEY_LANDSCAPE_HEIGHT_PERCENT, DEFAULT_LANDSCAPE_HEIGHT_PERCENT)
             .putBoolean(KEY_GLIDE_DIAGNOSTICS, DEFAULT_GLIDE_DIAGNOSTICS)
             .putBoolean(KEY_GLIDE_TYPING, DEFAULT_GLIDE_TYPING)
+            .putBoolean(KEY_DELETE_WHOLE_WORD, DEFAULT_DELETE_WHOLE_WORD)
+            .putBoolean(KEY_DOUBLE_SPACE_PERIOD, DEFAULT_DOUBLE_SPACE_PERIOD)
             .putBoolean(KEY_LEARN_LOCAL_WORDS, DEFAULT_LEARN_LOCAL_WORDS)
             .putBoolean(KEY_LOCAL_SUGGESTIONS, DEFAULT_LOCAL_SUGGESTIONS)
             .putInt(KEY_PORTRAIT_HEIGHT_PERCENT, DEFAULT_PORTRAIT_HEIGHT_PERCENT)
@@ -216,6 +224,8 @@ data class KeyboardLayoutSettings(
     val landscapeHeightPercent: Int,
     val glideDiagnostics: Boolean,
     val glideTyping: Boolean,
+    val deleteWholeWord: Boolean,
+    val doubleSpacePeriod: Boolean,
     val learnLocalWords: Boolean,
     val localSuggestions: Boolean,
     val portraitHeightPercent: Int,

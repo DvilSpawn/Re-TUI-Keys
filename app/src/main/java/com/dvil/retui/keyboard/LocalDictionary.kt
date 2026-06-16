@@ -117,15 +117,15 @@ object LocalDictionary {
         "thanks" to listOf("for"),
         "how" to listOf("are"),
         "what" to listOf("are"),
-        "are" to listOf("you", "things"),
+        "are" to listOf("you"),
         "i'm" to listOf("going", "not", "still"),
         "i'll" to listOf("check", "send", "update"),
-        "i" to listOf("am", "have", "will"),
+        "i" to listOf("will", "am", "have"),
         "we" to listOf("can", "should", "will"),
         "you" to listOf("can", "should", "will", "there", "free", "doing", "soon", "later"),
         "going" to listOf("to"),
         "the" to listOf("settings", "keyboard", "launcher"),
-        "open" to listOf("settings", "keyboard", "launcher"),
+        "open" to listOf("the", "settings", "keyboard", "launcher"),
         "check" to listOf("the", "this"),
         "send" to listOf("this", "the"),
         "update" to listOf("the", "this"),
@@ -138,7 +138,7 @@ object LocalDictionary {
         .mapValues { entry -> entry.value.mapNotNull { normalizeWord(it) } }
     private val staticTrigrams = mapOf(
         "hi how" to listOf("are"),
-        "how are" to listOf("you", "things"),
+        "how are" to listOf("you"),
         "are you" to listOf("there", "free"),
         "what are" to listOf("you"),
         "thank you" to listOf("for"),
@@ -160,6 +160,7 @@ object LocalDictionary {
             .joinToString(" ")
     }.mapValues { entry -> entry.value.mapNotNull { normalizeWord(it) } }
     private val staticThreeWordContexts = mapOf(
+        "hi how are" to listOf("you", "things"),
         "what are you" to listOf("doing"),
         "how are you" to listOf("doing"),
         "thanks for the" to listOf("update"),
@@ -176,8 +177,7 @@ object LocalDictionary {
     private val offlineGlideLanguageModel = OfflineGlideLanguageModel(
         bigrams = staticBigrams,
         trigrams = staticTrigrams,
-        threeWordContexts = staticThreeWordContexts,
-        commonWords = glideCalibrationWords
+        threeWordContexts = staticThreeWordContexts
     )
 
     fun preload(context: Context) {
@@ -628,7 +628,7 @@ object LocalDictionary {
         languageScore: Int
     ): Int {
         if (word.length < 2 || trace.length < 2) return 0
-        if (trace.length > 5 && word.length <= 2) return 0
+        if (trace.length > 5 && word.length <= 2 && languageScore <= 0) return 0
         if (startChar != null && word.first() != startChar && languageScore <= 0) return 0
         if (startChar == null && word.first() != trace.first()) return 0
 
@@ -649,7 +649,7 @@ object LocalDictionary {
         val isProtectedShortWord = word in glideProtectedShortWords
         val isBuiltInWord = word in builtInSet
         val minimumCoverage = when {
-            word == "night" && languageScore > 0 -> 0
+            word in setOf("morning", "night") && languageScore > 0 -> 0
             languageScore > 0 -> 1
             isCalibrationWord -> minOf(word.length, if (word.length <= 4) 1 else 2)
             word.length <= 4 -> 2
@@ -667,11 +667,19 @@ object LocalDictionary {
         score += if (word.length <= 3 && coverage == word.length && isProtectedShortWord) 360_000 else 0
         score += if (word.length == 4 && coverage == word.length) 240_000 else 0
         score += when (word) {
-            "talk" -> if ('k' in trace || 'l' in trace) 820_000 else 220_000
-            "thank" -> if ('h' in trace || 'n' in trace || 'k' in trace) 720_000 else 360_000
-            "night" -> if (trace.firstOrNull() in setOf('b', 'n')) 1_350_000 else 360_000
-            "thanks", "open", "see", "app", "am", "doing", "update", "works" -> 520_000
+            "talk" -> if (('k' in trace || 'l' in trace) && !('y' in trace && 'h' in trace)) 1_400_000 else 0
+            "thank" -> if ('y' in trace && 'h' in trace) 1_500_000 else if ('h' in trace || 'n' in trace || 'k' in trace) 900_000 else 420_000
+            "morning" -> if (trace.firstOrNull() in setOf('m', 'n') && trace.length >= 12) 1_550_000 else 260_000
+            "night" -> if (trace.firstOrNull() in setOf('b', 'v') || (trace.firstOrNull() == 'n' && trace.length <= 10)) 1_500_000 else 180_000
+            "the" -> if (trace.firstOrNull() == 't' && 'k' !in trace && 'n' !in trace && trace.length <= 8) 820_000 else 0
+            "it" -> if (languageScore > 0) 1_200_000 else 420_000
+            "things" -> if (languageScore > 0) 900_000 else 0
+            "thanks" -> if (trace.lastOrNull() in setOf('s', 'z') || languageScore > 0) 980_000 else 520_000
+            "open", "see", "app", "am", "doing", "update", "works" -> 520_000
             else -> 0
+        }
+        if ('\'' in word && word.length <= 4) {
+            score -= 180_000
         }
         score += if (endChar != null && word.last() == endChar) 90_000 else 0
         score -= (meanDistance * 360_000).toInt()
@@ -1035,12 +1043,11 @@ data class GlidePoint(
 private class OfflineGlideLanguageModel(
     private val bigrams: Map<String, List<String>>,
     private val trigrams: Map<String, List<String>>,
-    private val threeWordContexts: Map<String, List<String>>,
-    private val commonWords: Set<String>
+    private val threeWordContexts: Map<String, List<String>>
 ) {
     fun score(previousWords: List<String>, candidate: String): Int {
         if (previousWords.isEmpty()) return 0
-        var score = commonWordScore(candidate)
+        var score = 0
         previousWords.lastOrNull()?.let { previous ->
             score += rankedScore(bigrams[previous].orEmpty(), candidate, 620_000, 58_000)
         }
@@ -1053,10 +1060,6 @@ private class OfflineGlideLanguageModel(
             score += rankedScore(threeWordContexts[key].orEmpty(), candidate, 3_000_000, 120_000)
         }
         return score
-    }
-
-    private fun commonWordScore(candidate: String): Int {
-        return if (candidate in commonWords) 90_000 else 0
     }
 
     private fun rankedScore(words: List<String>, candidate: String, base: Int, decay: Int): Int {

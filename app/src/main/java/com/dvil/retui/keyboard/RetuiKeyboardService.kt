@@ -41,6 +41,7 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -49,6 +50,7 @@ import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -67,6 +69,8 @@ class RetuiKeyboardService : InputMethodService() {
         landscapeHeightPercent = KeyboardPrefs.DEFAULT_LANDSCAPE_HEIGHT_PERCENT,
         glideDiagnostics = KeyboardPrefs.DEFAULT_GLIDE_DIAGNOSTICS,
         glideTyping = KeyboardPrefs.DEFAULT_GLIDE_TYPING,
+        deleteWholeWord = KeyboardPrefs.DEFAULT_DELETE_WHOLE_WORD,
+        doubleSpacePeriod = KeyboardPrefs.DEFAULT_DOUBLE_SPACE_PERIOD,
         learnLocalWords = KeyboardPrefs.DEFAULT_LEARN_LOCAL_WORDS,
         localSuggestions = KeyboardPrefs.DEFAULT_LOCAL_SUGGESTIONS,
         portraitHeightPercent = KeyboardPrefs.DEFAULT_PORTRAIT_HEIGHT_PERCENT,
@@ -637,10 +641,7 @@ class RetuiKeyboardService : InputMethodService() {
             symbolKey(":", ";"),
             symbolKey("!", "¡"),
             symbolKey("?", "¿"),
-            KeySpec(ICON_LEFT, 0.95f, keyCode = KeyEvent.KEYCODE_DPAD_LEFT),
-            KeySpec(ICON_UP, 0.95f, keyCode = KeyEvent.KEYCODE_DPAD_UP),
-            KeySpec(ICON_DOWN, 0.95f, keyCode = KeyEvent.KEYCODE_DPAD_DOWN),
-            KeySpec(ICON_RIGHT, 0.95f, keyCode = KeyEvent.KEYCODE_DPAD_RIGHT),
+            KeySpec(ICON_DPAD, 2.2f, Special.DIRECTION_PAD, specialStyle = true),
             KeySpec(ICON_BACKSPACE, 1.25f, Special.BACKSPACE)
         )
     }
@@ -895,6 +896,9 @@ class RetuiKeyboardService : InputMethodService() {
         if (key.edgeAlias) {
             return edgeAliasKey(key)
         }
+        if (key.special == Special.DIRECTION_PAD) {
+            return directionPadKey(key)
+        }
         if (
             key.longText == null &&
             key.longKeyCode == null &&
@@ -927,6 +931,15 @@ class RetuiKeyboardService : InputMethodService() {
         } else {
             "${key.label}, long press ${key.longLabel}"
         }
+        return view
+    }
+
+    private fun directionPadKey(key: KeySpec): View {
+        val iconColor = if (key.specialStyle) theme.specialKeyText else theme.keyText
+        val view = DirectionPadIconView(this, iconColor, resources.displayMetrics.density)
+        view.background = if (key.specialStyle) specialKeyBackground(active = false) else keyBackground(active = false)
+        bindDirectionPadKey(view)
+        view.contentDescription = "Direction pad"
         return view
     }
 
@@ -1039,6 +1052,110 @@ class RetuiKeyboardService : InputMethodService() {
                 }
                 else -> true
             }
+        }
+    }
+
+    private fun bindDirectionPadKey(view: View) {
+        view.isClickable = true
+        view.isFocusable = false
+        var downRawX = 0f
+        var downRawY = 0f
+        var activeKeyCode: Int? = null
+        var popup: DirectionPadPopup? = null
+
+        fun move(keyCode: Int) {
+            popup?.select(keyCode)
+            if (activeKeyCode == keyCode) return
+            stopRepeat()
+            activeKeyCode = keyCode
+            moveCursorWithinActiveInput(keyCode)
+            startDirectionRepeat(keyCode)
+        }
+
+        fun clearSelection() {
+            if (activeKeyCode == null) return
+            activeKeyCode = null
+            stopRepeat()
+            popup?.select(null)
+        }
+
+        fun closePopup() {
+            popup?.popup?.dismiss()
+            popup = null
+        }
+
+        view.setOnTouchListener { touched, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downRawX = event.rawX
+                    downRawY = event.rawY
+                    activeKeyCode = null
+                    closePopup()
+                    popup = showDirectionPadPopup(touched)
+                    touched.isPressed = true
+                    pressFeedback(touched)
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val keyCode = directionKeyCodeForSwipe(downRawX, downRawY, event.rawX, event.rawY)
+                    if (keyCode == null) {
+                        clearSelection()
+                    } else {
+                        move(keyCode)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP,
+                MotionEvent.ACTION_CANCEL -> {
+                    touched.isPressed = false
+                    clearSelection()
+                    closePopup()
+                    true
+                }
+                else -> true
+            }
+        }
+    }
+
+    private fun moveCursorWithinActiveInput(keyCode: Int): Boolean {
+        val ic = currentInputConnection ?: return false
+        val extracted = ic.getExtractedText(ExtractedTextRequest(), 0) ?: return false
+        val text = extracted.text?.toString() ?: return false
+        if (text.isEmpty()) return false
+        val selectionStart = extracted.selectionStart.coerceIn(0, text.length)
+        val selectionEnd = extracted.selectionEnd.coerceIn(0, text.length)
+        val cursor = when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_LEFT -> min(selectionStart, selectionEnd)
+            KeyEvent.KEYCODE_DPAD_RIGHT -> max(selectionStart, selectionEnd)
+            else -> selectionEnd
+        }
+        val next = when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_LEFT -> (cursor - 1).coerceAtLeast(0)
+            KeyEvent.KEYCODE_DPAD_RIGHT -> (cursor + 1).coerceAtMost(text.length)
+            KeyEvent.KEYCODE_DPAD_UP -> verticalCursorTarget(text, cursor, up = true)
+            KeyEvent.KEYCODE_DPAD_DOWN -> verticalCursorTarget(text, cursor, up = false)
+            else -> return false
+        }
+        if (next == cursor) return false
+        val absoluteNext = (extracted.startOffset + next).coerceAtLeast(0)
+        return ic.setSelection(absoluteNext, absoluteNext)
+    }
+
+    private fun verticalCursorTarget(text: String, cursor: Int, up: Boolean): Int {
+        val safeCursor = cursor.coerceIn(0, text.length)
+        val lineStart = text.lastIndexOf('\n', (safeCursor - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
+        val lineEnd = text.indexOf('\n', safeCursor).let { if (it < 0) text.length else it }
+        val column = safeCursor - lineStart
+        return if (up) {
+            if (lineStart == 0) return safeCursor
+            val previousEnd = lineStart - 1
+            val previousStart = text.lastIndexOf('\n', (previousEnd - 1).coerceAtLeast(0)).let { if (it < 0) 0 else it + 1 }
+            (previousStart + column).coerceAtMost(previousEnd)
+        } else {
+            if (lineEnd >= text.length) return safeCursor
+            val nextStart = lineEnd + 1
+            val nextEnd = text.indexOf('\n', nextStart).let { if (it < 0) text.length else it }
+            (nextStart + column).coerceAtMost(nextEnd)
         }
     }
 
@@ -1189,6 +1306,93 @@ class RetuiKeyboardService : InputMethodService() {
         val dy = rawY - downRawY
         val threshold = dpFloat(18f)
         return (dx * dx) + (dy * dy) >= threshold * threshold
+    }
+
+    private fun directionKeyCodeForSwipe(downRawX: Float, downRawY: Float, rawX: Float, rawY: Float): Int? {
+        val dx = rawX - downRawX
+        val dy = rawY - downRawY
+        val threshold = dpFloat(12f)
+        if ((dx * dx) + (dy * dy) < threshold * threshold) return null
+        return if (abs(dx) >= abs(dy)) {
+            if (dx < 0f) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
+        } else {
+            if (dy < 0f) KeyEvent.KEYCODE_DPAD_UP else KeyEvent.KEYCODE_DPAD_DOWN
+        }
+    }
+
+    private fun showDirectionPadPopup(anchor: View): DirectionPadPopup {
+        val cellSize = dp(44)
+        val gapSize = dp(18)
+        val sideGapSize = (cellSize + gapSize) / 2
+        val grid = LinearLayout(this)
+        grid.orientation = LinearLayout.VERTICAL
+        grid.setPadding(0, 0, 0, 0)
+
+        val cells = mutableMapOf<Int, TextView>()
+        fun arrowCell(label: String, keyCode: Int): TextView {
+            val cell = keyLabel(label, Gravity.CENTER, keyTextSize(label))
+            cell.setTextColor(theme.specialKeyText)
+            cell.background = keyBackground(active = false)
+            cells[keyCode] = cell
+            return cell
+        }
+        fun spacer(width: Int, height: Int): View {
+            return View(this).apply {
+                background = ColorDrawable(Color.TRANSPARENT)
+                layoutParams = LinearLayout.LayoutParams(width, height)
+            }
+        }
+        fun addRow(left: View, center: View, right: View, height: Int) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.addView(left)
+            row.addView(center)
+            row.addView(right)
+            grid.addView(row, LinearLayout.LayoutParams(-2, height))
+        }
+
+        addRow(
+            spacer(sideGapSize, cellSize),
+            arrowCell(ICON_UP, KeyEvent.KEYCODE_DPAD_UP).apply {
+                layoutParams = LinearLayout.LayoutParams(cellSize, cellSize)
+            },
+            spacer(sideGapSize, cellSize),
+            cellSize
+        )
+        addRow(
+            arrowCell(ICON_LEFT, KeyEvent.KEYCODE_DPAD_LEFT).apply {
+                layoutParams = LinearLayout.LayoutParams(cellSize, cellSize)
+            },
+            spacer(gapSize, cellSize),
+            arrowCell(ICON_RIGHT, KeyEvent.KEYCODE_DPAD_RIGHT).apply {
+                layoutParams = LinearLayout.LayoutParams(cellSize, cellSize)
+            },
+            cellSize
+        )
+        addRow(
+            spacer(sideGapSize, cellSize),
+            arrowCell(ICON_DOWN, KeyEvent.KEYCODE_DPAD_DOWN).apply {
+                layoutParams = LinearLayout.LayoutParams(cellSize, cellSize)
+            },
+            spacer(sideGapSize, cellSize),
+            cellSize
+        )
+
+        val popup = PopupWindow(grid, cellSize * 2 + gapSize, cellSize * 3, false)
+        popup.isOutsideTouchable = false
+        popup.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+
+        val location = IntArray(2)
+        anchor.getLocationOnScreen(location)
+        val x = location[0] + (anchor.width / 2) - (popup.width / 2)
+        val y = location[1] + (anchor.height / 2) - (popup.height / 2)
+        popup.showAtLocation(anchor.rootView, Gravity.NO_GRAVITY, x, y)
+        return DirectionPadPopup(
+            popup = popup,
+            cells = cells,
+            inactiveBackground = keyBackground(active = false),
+            activeBackground = specialKeyBackground(active = true)
+        )
     }
 
     private fun appendGlideHit(trace: MutableList<Char>, rawX: Float, rawY: Float) {
@@ -1821,7 +2025,7 @@ class RetuiKeyboardService : InputMethodService() {
             }
             Special.SHIFT -> handleShift()
             Special.SPACE -> {
-                if (hasLatchedModifiers()) sendKeyCode(KeyEvent.KEYCODE_SPACE) else commitFromKey(" ")
+                if (hasLatchedModifiers()) sendKeyCode(KeyEvent.KEYCODE_SPACE) else handleSpace()
             }
             Special.SYMBOLS -> {
                 symbols = !symbols
@@ -1833,6 +2037,7 @@ class RetuiKeyboardService : InputMethodService() {
             Special.CTRL -> toggleModifier(Special.CTRL)
             Special.ALT -> toggleModifier(Special.ALT)
             Special.SUPER -> toggleModifier(Special.SUPER)
+            Special.DIRECTION_PAD -> Unit
             Special.SHIFT_ENTER -> sendShiftEnter()
             Special.SETTINGS -> openKeyboardSettings()
             Special.HIDE -> requestHideSelf(0)
@@ -1908,6 +2113,29 @@ class RetuiKeyboardService : InputMethodService() {
         repeatHandler.postDelayed(runnable, REPEAT_INITIAL_DELAY_MS)
     }
 
+    private fun startDirectionRepeat(keyCode: Int) {
+        stopRepeat()
+        var step = 0
+        val runnable = object : Runnable {
+            override fun run() {
+                moveCursorWithinActiveInput(keyCode)
+                step++
+                repeatHandler.postDelayed(this, directionRepeatDelayMs(step))
+            }
+        }
+        repeatRunnable = runnable
+        repeatHandler.postDelayed(runnable, DIRECTION_REPEAT_INITIAL_DELAY_MS)
+    }
+
+    private fun directionRepeatDelayMs(step: Int): Long {
+        return when {
+            step < 3 -> 260L
+            step < 7 -> 170L
+            step < 14 -> 105L
+            else -> 58L
+        }
+    }
+
     private fun stopRepeat() {
         repeatRunnable?.let { repeatHandler.removeCallbacks(it) }
         repeatRunnable = null
@@ -1959,6 +2187,37 @@ class RetuiKeyboardService : InputMethodService() {
         }
     }
 
+    private fun handleSpace() {
+        if (layout.doubleSpacePeriod && commitDoubleSpacePeriod()) return
+        commitFromKey(" ")
+    }
+
+    private fun commitDoubleSpacePeriod(): Boolean {
+        if (shouldSendPlainKeyEventsForCurrentField()) return false
+        val ic = currentInputConnection ?: return false
+        val before = ic.getTextBeforeCursor(96, 0)?.toString() ?: return false
+        if (!before.endsWith(" ") || before.endsWith("  ")) return false
+        val wordEnd = before.length - 1
+        if (wordEnd <= 0 || !isWordChar(before[wordEnd - 1])) return false
+        var wordStart = wordEnd
+        while (wordStart > 0 && isWordChar(before[wordStart - 1])) {
+            wordStart--
+        }
+        val finishedWord = before.substring(wordStart, wordEnd)
+        ic.deleteSurroundingText(1, 0)
+        commit(". ")
+        localWordBeforeCursor = ""
+        learnFinishedWord(finishedWord)
+        if (shifted && !capsLocked) {
+            shifted = false
+            lastShiftTapAtMs = 0L
+            setInputView(buildKeyboardView())
+        } else {
+            refreshSuggestionStripSoon()
+        }
+        return true
+    }
+
     private fun handleShift() {
         val now = System.currentTimeMillis()
         val doubleTap = now - lastShiftTapAtMs <= SHIFT_DOUBLE_TAP_MS
@@ -1993,12 +2252,35 @@ class RetuiKeyboardService : InputMethodService() {
             ic.commitText("", 1)
             localWordBeforeCursor = ""
         } else {
+            if (layout.deleteWholeWord && deleteWordBeforeCursor(ic)) {
+                refreshSuggestionStripSoon()
+                return
+            }
             ic.deleteSurroundingText(1, 0)
             if (localWordBeforeCursor.isNotEmpty()) {
                 localWordBeforeCursor = localWordBeforeCursor.dropLast(1)
             }
         }
         refreshSuggestionStripSoon()
+    }
+
+    private fun deleteWordBeforeCursor(ic: InputConnection): Boolean {
+        val before = ic.getTextBeforeCursor(128, 0)?.toString() ?: return false
+        if (before.isEmpty()) return false
+        var wordEnd = before.length
+        while (wordEnd > 0 && before[wordEnd - 1].isWhitespace()) {
+            wordEnd--
+        }
+        if (wordEnd <= 0 || !isWordChar(before[wordEnd - 1])) return false
+        var wordStart = wordEnd
+        while (wordStart > 0 && isWordChar(before[wordStart - 1])) {
+            wordStart--
+        }
+        val deleteCount = before.length - wordStart
+        if (deleteCount <= 0) return false
+        ic.deleteSurroundingText(deleteCount, 0)
+        localWordBeforeCursor = ""
+        return true
     }
 
     private fun forwardDelete() {
@@ -2653,6 +2935,63 @@ class RetuiKeyboardService : InputMethodService() {
         }
     }
 
+    private class DirectionPadPopup(
+        val popup: PopupWindow,
+        private val cells: Map<Int, TextView>,
+        private val inactiveBackground: Drawable,
+        private val activeBackground: Drawable
+    ) {
+        fun select(keyCode: Int?) {
+            cells.forEach { (cellKeyCode, cell) ->
+                val background = if (cellKeyCode == keyCode) activeBackground else inactiveBackground
+                cell.background = background.constantState?.newDrawable() ?: background
+            }
+        }
+    }
+
+    private class DirectionPadIconView(
+        context: Context,
+        color: Int,
+        density: Float
+    ) : View(context) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            this.color = color
+            setShadowLayer(2f * density, 0f, 1f * density, Color.argb(130, 0, 0, 0))
+        }
+        private val path = Path()
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val cx = width / 2f
+            val cy = height / 2f
+            val size = min(width, height) * 0.58f
+            val stem = size * 0.16f
+            val head = size * 0.28f
+            val half = size / 2f
+
+            path.reset()
+            path.addRect(cx - stem / 2f, cy - half + head, cx + stem / 2f, cy + half - head, Path.Direction.CW)
+            path.addRect(cx - half + head, cy - stem / 2f, cx + half - head, cy + stem / 2f, Path.Direction.CW)
+            addArrowHead(cx, cy - half, 0f, -1f, head)
+            addArrowHead(cx, cy + half, 0f, 1f, head)
+            addArrowHead(cx - half, cy, -1f, 0f, head)
+            addArrowHead(cx + half, cy, 1f, 0f, head)
+            canvas.drawPath(path, paint)
+        }
+
+        private fun addArrowHead(tipX: Float, tipY: Float, dx: Float, dy: Float, size: Float) {
+            val baseX = tipX - dx * size
+            val baseY = tipY - dy * size
+            val sideX = -dy * size * 0.55f
+            val sideY = dx * size * 0.55f
+            path.moveTo(tipX, tipY)
+            path.lineTo(baseX + sideX, baseY + sideY)
+            path.lineTo(baseX - sideX, baseY - sideY)
+            path.close()
+        }
+    }
+
     private class GlideLayerFrame(context: Context) : FrameLayout(context) {
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             val width = MeasureSpec.getSize(widthMeasureSpec)
@@ -2799,6 +3138,7 @@ class RetuiKeyboardService : InputMethodService() {
         CTRL,
         ALT,
         SUPER,
+        DIRECTION_PAD,
         SHIFT_ENTER,
         SETTINGS,
         HIDE,
@@ -3089,6 +3429,7 @@ class RetuiKeyboardService : InputMethodService() {
         private const val THEME_OVERRIDE_PREFIX = "theme."
         private const val REPEAT_INITIAL_DELAY_MS = 260L
         private const val REPEAT_INTERVAL_MS = 42L
+        private const val DIRECTION_REPEAT_INITIAL_DELAY_MS = 360L
         private const val SHIFT_DOUBLE_TAP_MS = 360L
         private const val GLIDE_TRAIL_HOLD_MS = 180L
         private const val ACTIVE_ADD_WORD_MIN_LENGTH = 4
@@ -3096,6 +3437,7 @@ class RetuiKeyboardService : InputMethodService() {
         private const val ICON_BACKSPACE = "⌫"
         private const val ICON_CONTEXT = "⌘"
         private const val ICON_DONE = "✓"
+        private const val ICON_DPAD = "↕↔"
         private const val ICON_DOWN = "↓"
         private const val ICON_ENTER = "↵"
         private const val ICON_ENTER_GO = "→"
