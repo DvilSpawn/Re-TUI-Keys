@@ -138,10 +138,11 @@ class RetuiKeyboardService : InputMethodService() {
         currentInfo = info
         applyEditorInfo(info)
         val nextLayout = KeyboardPrefs.readLayout(prefs)
-        if (keyboardViewSignature(nextLayout) != lastKeyboardViewSignature) {
+        layout = nextLayout
+        val shiftedForEmptyInput = armShiftForEmptyInputIfNeeded()
+        if (shiftedForEmptyInput || keyboardViewSignature(nextLayout) != lastKeyboardViewSignature) {
             setInputView(buildKeyboardView())
         } else {
-            layout = nextLayout
             refreshSuggestionStripSoon()
         }
     }
@@ -1068,7 +1069,7 @@ class RetuiKeyboardService : InputMethodService() {
             if (activeKeyCode == keyCode) return
             stopRepeat()
             activeKeyCode = keyCode
-            moveCursorWithinActiveInput(keyCode)
+            sendDirectionKeyCode(keyCode)
             startDirectionRepeat(keyCode)
         }
 
@@ -1484,7 +1485,8 @@ class RetuiKeyboardService : InputMethodService() {
             refreshSuggestionStripSoon()
             return
         }
-        currentInputConnection?.commitText("$commitValue ", 1)
+        val casedCommitValue = applyActiveWordCasing(commitValue)
+        currentInputConnection?.commitText("$casedCommitValue ", 1)
         localWordBeforeCursor = ""
         pendingAddWord = null
         if (!suggestion.isNullOrBlank()) {
@@ -1497,14 +1499,20 @@ class RetuiKeyboardService : InputMethodService() {
             geometryCandidates = geometryCandidates,
             traceCandidates = traceCandidates,
             contextWords = contextWords,
-            committed = commitValue,
+            committed = casedCommitValue,
             source = when {
                 geometrySuggestion != null -> "geometry"
                 suggestion != null -> "trace"
                 else -> "fallback"
             }
         )
-        refreshSuggestionStripSoon()
+        if (shifted && !capsLocked) {
+            shifted = false
+            lastShiftTapAtMs = 0L
+            setInputView(buildKeyboardView())
+        } else {
+            refreshSuggestionStripSoon()
+        }
     }
 
     private fun recordGlideDiagnostics(
@@ -2118,7 +2126,7 @@ class RetuiKeyboardService : InputMethodService() {
         var step = 0
         val runnable = object : Runnable {
             override fun run() {
-                moveCursorWithinActiveInput(keyCode)
+                sendDirectionKeyCode(keyCode)
                 step++
                 repeatHandler.postDelayed(this, directionRepeatDelayMs(step))
             }
@@ -2154,17 +2162,129 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun commitFromKey(value: String) {
         val finishedWord = if (isWordBoundary(value)) currentWordBeforeCursor() else null
-        if (!sendTextKeyEventForMaskedField(value)) {
-            commit(value)
+        smartSentenceCommitText(value)?.let { smartValue ->
+            commit(smartValue)
+            trackCommittedText(smartValue)
+            learnFinishedWord(finishedWord)
+            armSentenceShift()
+            return
         }
-        trackCommittedText(value)
+        val commitValue = initialFieldCasedText(value)
+        val armShiftAfterSpace = shouldArmSentenceShiftAfterManualSpace(value)
+        if (!sendTextKeyEventForMaskedField(commitValue)) {
+            commit(commitValue)
+        }
+        trackCommittedText(commitValue)
         learnFinishedWord(finishedWord)
-        if (shifted && !capsLocked) {
+        if (armShiftAfterSpace) {
+            armSentenceShift()
+        } else if (shifted && !capsLocked) {
             shifted = false
             lastShiftTapAtMs = 0L
             setInputView(buildKeyboardView())
         } else {
             refreshSuggestionStripSoon()
+        }
+    }
+
+    private fun smartSentenceCommitText(value: String): String? {
+        if (!shouldApplyEnglishTypingAssist() || hasLatchedModifiers()) return null
+        val punctuation = value.singleOrNull() ?: return null
+        if (!isSentenceTerminal(punctuation)) return null
+        val before = currentInputConnection?.getTextBeforeCursor(SENTENCE_CONTEXT_CHARS, 0)?.toString() ?: return null
+        if (!shouldAutoSpaceAfterSentencePunctuation(punctuation, before)) return null
+        return "$value "
+    }
+
+    private fun shouldArmSentenceShiftAfterManualSpace(value: String): Boolean {
+        if (value != " " || !shouldApplyEnglishTypingAssist() || hasLatchedModifiers()) return false
+        val before = currentInputConnection?.getTextBeforeCursor(SENTENCE_CONTEXT_CHARS, 0)?.toString() ?: return false
+        return isSentenceBoundaryBeforeCursor(before)
+    }
+
+    private fun shouldApplyEnglishTypingAssist(): Boolean {
+        if (!layout.doubleSpacePeriod) return false
+        val info = currentInfo
+        if (usesNumberPad(info)) return false
+        if (info != null && (isPasswordField(info) || isCommandLikeField(info))) return false
+        return true
+    }
+
+    private fun shouldAutoSpaceAfterSentencePunctuation(punctuation: Char, before: String): Boolean {
+        val last = before.lastOrNull() ?: return false
+        if (last.isWhitespace() || isSentenceTerminal(last) || last in ",;:") return false
+        if (punctuation == '.' && isLikelyNonSentenceDotContext(before, rejectDottedToken = false)) return false
+        return last.isLetterOrDigit() || isSentenceClosingChar(last)
+    }
+
+    private fun isSentenceBoundaryBeforeCursor(before: String): Boolean {
+        var index = before.length - 1
+        while (index >= 0 && isSentenceClosingChar(before[index])) {
+            index--
+        }
+        if (index < 0) return false
+        val terminal = before[index]
+        if (!isSentenceTerminal(terminal)) return false
+        return terminal != '.' || !isLikelyNonSentenceDotContext(
+            before.substring(0, index),
+            rejectDottedToken = true
+        )
+    }
+
+    private fun isLikelyNonSentenceDotContext(beforeDot: String, rejectDottedToken: Boolean): Boolean {
+        val token = trailingToken(beforeDot)
+        if (token.isBlank()) return true
+        val lower = token.lowercase()
+        if (token.lastOrNull()?.isDigit() == true) return true
+        if (token.length == 1 && token.first().isLowerCase()) return true
+        if (rejectDottedToken && token.contains('.')) return true
+        return lower.contains("@") ||
+            lower.contains("://") ||
+            lower.startsWith("www") ||
+            lower.contains("/") ||
+            lower.contains("\\")
+    }
+
+    private fun trailingToken(value: String): String {
+        var start = value.length
+        while (start > 0 && !value[start - 1].isWhitespace()) {
+            start--
+        }
+        return value.substring(start)
+    }
+
+    private fun isSentenceTerminal(char: Char): Boolean {
+        return char == '.' || char == '!' || char == '?'
+    }
+
+    private fun isSentenceClosingChar(char: Char): Boolean {
+        return char == '"' ||
+            char == '\'' ||
+            char == ')' ||
+            char == ']' ||
+            char == '}' ||
+            char == '>' ||
+            char == '”' ||
+            char == '’'
+    }
+
+    private fun armSentenceShift() {
+        if (capsLocked) {
+            refreshSuggestionStripSoon()
+            return
+        }
+        shifted = true
+        lastShiftTapAtMs = 0L
+        setInputView(buildKeyboardView())
+    }
+
+    private fun applyActiveWordCasing(word: String): String {
+        return when {
+            capsLocked -> word.uppercase()
+            shifted -> word.replaceFirstChar { char ->
+                if (char.isLowerCase()) char.titlecase() else char.toString()
+            }
+            else -> word
         }
     }
 
@@ -2174,7 +2294,7 @@ class RetuiKeyboardService : InputMethodService() {
         if (currentWord.value.isNotEmpty() && !currentWord.fromLocalFallback) {
             ic.deleteSurroundingText(currentWord.value.length, 0)
         }
-        ic.commitText(suggestionCommitText(word, currentWord), 1)
+        ic.commitText(suggestionCommitText(applyActiveWordCasing(word), currentWord), 1)
         pendingAddWord = null
         localWordBeforeCursor = ""
         LocalDictionary.recordAcceptedWord(prefs, word)
@@ -2208,14 +2328,38 @@ class RetuiKeyboardService : InputMethodService() {
         commit(". ")
         localWordBeforeCursor = ""
         learnFinishedWord(finishedWord)
-        if (shifted && !capsLocked) {
-            shifted = false
-            lastShiftTapAtMs = 0L
-            setInputView(buildKeyboardView())
-        } else {
-            refreshSuggestionStripSoon()
-        }
+        armSentenceShift()
         return true
+    }
+
+    private fun armShiftForEmptyInputIfNeeded(): Boolean {
+        if (!shouldApplyEnglishTypingAssist() || hasLatchedModifiers() || shifted || capsLocked) return false
+        if (!isCurrentInputEmpty()) return false
+        shifted = true
+        lastShiftTapAtMs = 0L
+        return true
+    }
+
+    private fun initialFieldCasedText(value: String): String {
+        if (!shouldApplyEnglishTypingAssist() || hasLatchedModifiers()) return value
+        if (value.length != 1 || !value.first().isLetter()) return value
+        if (!isCurrentInputEmpty()) return value
+        return value.replaceFirstChar { char ->
+            if (char.isLowerCase()) char.titlecase() else char.toString()
+        }
+    }
+
+    private fun isCurrentInputEmpty(): Boolean {
+        val ic = currentInputConnection ?: return false
+        val extracted = ic.getExtractedText(ExtractedTextRequest(), 0)
+        if (extracted?.text != null) {
+            return extracted.text.isEmpty() &&
+                extracted.selectionStart == 0 &&
+                extracted.selectionEnd == 0
+        }
+        val before = ic.getTextBeforeCursor(1, 0) ?: return false
+        val after = ic.getTextAfterCursor(1, 0) ?: return false
+        return before.isEmpty() && after.isEmpty()
     }
 
     private fun handleShift() {
@@ -2309,6 +2453,21 @@ class RetuiKeyboardService : InputMethodService() {
         val metaState = latchedMetaState() or extraMetaState
         dispatchKeyCode(ic, keyCode, metaState)
         val clearedModifiers = clearLatchedModifiers()
+        if (clearedModifiers) {
+            setInputView(buildKeyboardView())
+            return
+        }
+        refreshSuggestionStripSoon()
+    }
+
+    private fun sendDirectionKeyCode(keyCode: Int) {
+        val ic = currentInputConnection ?: return
+        val hadModifiers = hasLatchedModifiers()
+        val handled = dispatchKeyCode(ic, keyCode, latchedMetaState())
+        val clearedModifiers = clearLatchedModifiers()
+        if (!handled && !hadModifiers) {
+            moveCursorWithinActiveInput(keyCode)
+        }
         if (clearedModifiers) {
             setInputView(buildKeyboardView())
             return
@@ -2831,9 +2990,12 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun isCommandLikeField(info: EditorInfo): Boolean {
+        val packageName = info.packageName?.lowercase().orEmpty()
         val action = info.imeOptions and EditorInfo.IME_MASK_ACTION
         val klass = info.inputType and InputType.TYPE_MASK_CLASS
-        return action == EditorInfo.IME_ACTION_GO ||
+        return packageName.contains("termux") ||
+            packageName.contains("terminal") ||
+            action == EditorInfo.IME_ACTION_GO ||
             action == EditorInfo.IME_ACTION_SEND ||
             klass == InputType.TYPE_CLASS_TEXT && info.hintText?.contains("$") == true
     }
@@ -3433,6 +3595,7 @@ class RetuiKeyboardService : InputMethodService() {
         private const val SHIFT_DOUBLE_TAP_MS = 360L
         private const val GLIDE_TRAIL_HOLD_MS = 180L
         private const val ACTIVE_ADD_WORD_MIN_LENGTH = 4
+        private const val SENTENCE_CONTEXT_CHARS = 128
         private const val NAV_MODE_GESTURAL = 2
         private const val ICON_BACKSPACE = "⌫"
         private const val ICON_CONTEXT = "⌘"

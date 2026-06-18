@@ -287,6 +287,24 @@ class LocalDictionaryGlideTest {
         )
     }
 
+    @Test
+    fun learnedWordsDoNotAppearAsUniversalNextWordSuggestions() {
+        val prefs = prefsWithWords("asalamualaikum")
+        repeat(6) {
+            LocalDictionary.recordAcceptedWord(prefs, "asalamualaikum")
+        }
+
+        assertTrue(LocalDictionary.suggestNextWords(prefs, "hi", 5).isEmpty())
+        assertTrue(!LocalDictionary.suggestNextWords(prefs, "good", 5).contains("asalamualaikum"))
+    }
+
+    @Test
+    fun learnedWordsStillAppearForTypedPrefix() {
+        val prefs = prefsWithWords("asalamualaikum")
+
+        assertTrue(LocalDictionary.suggest(prefs, "asa", 5).contains("asalamualaikum"))
+    }
+
     @org.junit.Ignore("Calibration fixture from a real session; use for offline tuning, not as a release gate.")
     @Test
     fun geometryGlideRanksPulledPhraseSession() {

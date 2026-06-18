@@ -46,7 +46,7 @@ object KeyboardPrefs {
     const val DEFAULT_GLIDE_DIAGNOSTICS = false
     const val DEFAULT_GLIDE_TYPING = false
     const val DEFAULT_DELETE_WHOLE_WORD = false
-    const val DEFAULT_DOUBLE_SPACE_PERIOD = false
+    const val DEFAULT_DOUBLE_SPACE_PERIOD = true
     const val DEFAULT_LEARN_LOCAL_WORDS = true
     const val DEFAULT_LOCAL_SUGGESTIONS = true
     const val DEFAULT_PORTRAIT_HEIGHT_PERCENT = DEFAULT_HEIGHT_PERCENT

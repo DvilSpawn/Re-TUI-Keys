@@ -255,10 +255,6 @@ object LocalDictionary {
         staticBigrams[previous].orEmpty().forEachIndexed { index, word ->
             offer(word, 120_000 - (index * 6_000))
         }
-        readEntries(prefs)
-            .filter { it.frequency >= 3 }
-            .take(3)
-            .forEach { entry -> offer(entry.word, 38_000 + (entry.frequency * 450).coerceAtMost(18_000)) }
 
         return ranked.values
             .sortedWith(compareByDescending<RankedCandidate> { it.score }.thenBy { it.word })

@@ -9,7 +9,7 @@ storage with manual backup and restore.
 
 ## Current Status
 
-- Version: `0.1.15`
+- Version: `0.1.18`
 - Package: `com.dvil.retui.keyboard`
 - Minimum Android version: API 26
 - Target Android version: API 36
@@ -34,6 +34,9 @@ dependencies.
 - Re:TUI styled keyboard surface with terminal/cyberdeck-inspired panels.
 - QWERTY, numeric, and symbol layouts.
 - Shift supports one-shot capitalization and caps lock by double tap.
+- Smart sentence assist can start empty text fields with a capital, add spaces
+  after `.`, `?`, and `!`, capitalize the next word, and turn double-space after
+  a word into `. `.
 - Long-press alternate characters with preview popups.
 - Local suggestion strip above the keyboard.
 - User dictionary with visible local word list in settings.
