@@ -62,6 +62,17 @@ class LocalDictionaryGlideTest {
     }
 
     @Test
+    fun geometryGlideUsesShapeWhenTraceMissesLetters() {
+        val prefs = prefsWithWords()
+        val centers = qwertyCenters()
+        val path = "custom".map { centers.getValue(it) }
+
+        val suggestions = LocalDictionary.suggestGlideGeometry(prefs, path, centers, "cm", 3)
+
+        assertEquals("custom", suggestions.firstOrNull())
+    }
+
+    @Test
     fun geometryGlideRanksHowFromNoisyPassThroughTrace() {
         val prefs = prefsWithWords()
         val centers = qwertyCenters()
@@ -288,6 +299,71 @@ class LocalDictionaryGlideTest {
     }
 
     @Test
+    fun geometryGlideRanksLatestPhoneCorrections() {
+        val prefs = prefsWithWords()
+        val centers = qwertyCenters()
+
+        assertEquals(
+            "thanks",
+            LocalDictionary.suggestGlideGeometry(
+                prefs = prefs,
+                points = "tyhgfdsdfcvbhjhgfd".map { centers.getValue(it) },
+                keyCenters = centers,
+                rawTrace = "tyhgfdsdfcvbhjhgfd",
+                limit = 5
+            ).firstOrNull()
+        )
+        assertEquals(
+            "app",
+            LocalDictionary.suggestGlideGeometry(
+                prefs = prefs,
+                points = "asdfghuio".map { centers.getValue(it) },
+                keyCenters = centers,
+                rawTrace = "asdfghuio",
+                limit = 5,
+                previousWords = listOf("the")
+            ).firstOrNull()
+        )
+    }
+
+    @Test
+    fun geometryGlideRanksFutoCommonShortCorrections() {
+        val prefs = prefsWithWords()
+        val centers = qwertyCenters()
+
+        assertEquals(
+            "the",
+            LocalDictionary.suggestGlideGeometry(
+                prefs = prefs,
+                points = "tyghgtre".map { centers.getValue(it) },
+                keyCenters = centers,
+                rawTrace = "tyghgtre",
+                limit = 5
+            ).firstOrNull()
+        )
+        assertEquals(
+            "in",
+            LocalDictionary.suggestGlideGeometry(
+                prefs = prefs,
+                points = "ijn".map { centers.getValue(it) },
+                keyCenters = centers,
+                rawTrace = "ijn",
+                limit = 5
+            ).firstOrNull()
+        )
+        assertEquals(
+            "of",
+            LocalDictionary.suggestGlideGeometry(
+                prefs = prefs,
+                points = "oiuytf".map { centers.getValue(it) },
+                keyCenters = centers,
+                rawTrace = "oiuytf",
+                limit = 5
+            ).firstOrNull()
+        )
+    }
+
+    @Test
     fun learnedWordsDoNotAppearAsUniversalNextWordSuggestions() {
         val prefs = prefsWithWords("asalamualaikum")
         repeat(6) {
@@ -303,6 +379,23 @@ class LocalDictionaryGlideTest {
         val prefs = prefsWithWords("asalamualaikum")
 
         assertTrue(LocalDictionary.suggest(prefs, "asa", 5).contains("asalamualaikum"))
+    }
+
+    @Test
+    fun currentWordAlternativesDoNotIncludeLongerCompletions() {
+        val prefs = prefsWithWords("william")
+
+        val suggestions = LocalDictionary.suggestCurrentWordAlternatives(prefs, "Will", 3)
+
+        assertEquals(listOf("Will", "Well"), suggestions.take(2))
+        assertTrue(!suggestions.contains("William"))
+    }
+
+    @Test
+    fun willPredictsCommonNextWords() {
+        val prefs = prefsWithWords()
+
+        assertEquals(listOf("you", "know"), LocalDictionary.suggestNextWords(prefs, "will", 2))
     }
 
     @org.junit.Ignore("Calibration fixture from a real session; use for offline tuning, not as a release gate.")

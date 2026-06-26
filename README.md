@@ -38,6 +38,8 @@ dependencies.
   after `.`, `?`, and `!`, capitalize the next word, and turn double-space after
   a word into `. `.
 - Long-press alternate characters with preview popups.
+- Long-press `.` opens a scrollable local emoji keyboard using the Unicode
+  fully-qualified emoji list in CLDR order.
 - Local suggestion strip above the keyboard.
 - User dictionary with visible local word list in settings.
 - Manual dictionary add/remove, backup, and restore.

@@ -46,6 +46,7 @@ import android.view.inputmethod.InputConnection
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.PopupWindow
+import android.widget.ScrollView
 import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
@@ -109,6 +110,8 @@ class RetuiKeyboardService : InputMethodService() {
     private var localWordBeforeCursor = ""
     private val glideKeyHits = mutableListOf<GlideKeyHit>()
     private var glideTrailView: GlideTrailView? = null
+    private var emojiMode = false
+    private var emojiCategoryIndex = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -237,34 +240,61 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun buildPortraitKeyboard(): View {
         val root = keyboardRoot(LinearLayout.VERTICAL)
-        if (shouldOfferSuggestions()) {
+        val categoryInHeader = emojiMode && shouldOfferSuggestions()
+        if (categoryInHeader) {
+            root.addView(emojiCategoryRow(), fixedRowParams(35))
+        } else if (shouldOfferSuggestions()) {
             root.addView(suggestionStripView(), fixedRowParams(35))
         }
-        val main = keyboardBody()
-        if (usesNumberPad()) {
-            addNumberPadRows(main, landscape = false)
-        } else {
-            addTextRows(main, landscape = false)
-        }
-        root.addView(glideLayer(main), LinearLayout.LayoutParams(-1, -2))
+        val main = normalKeyboardBody(landscape = false)
+        val body = if (emojiMode) emojiBodyLayer(main, categoryInHeader) else glideLayer(main)
+        root.addView(body, LinearLayout.LayoutParams(-1, -2))
         return root
     }
 
     private fun buildLandscapeKeyboard(): View {
         val root = keyboardRoot(LinearLayout.VERTICAL)
-        if (shouldOfferSuggestions()) {
+        val categoryInHeader = emojiMode && shouldOfferSuggestions()
+        if (categoryInHeader) {
+            root.addView(emojiCategoryRow(), fixedRowParams(28))
+        } else if (shouldOfferSuggestions()) {
             root.addView(suggestionStripView(), fixedRowParams(28))
         }
+        val main = normalKeyboardBody(landscape = true)
+        val body = if (emojiMode) emojiBodyLayer(main, categoryInHeader) else main
+        root.addView(body, LinearLayout.LayoutParams(-1, -2))
+        return root
+    }
+
+    private fun normalKeyboardBody(landscape: Boolean): LinearLayout {
         val main = keyboardBody()
         if (usesNumberPad()) {
-            addNumberPadRows(main, landscape = true)
-        } else if (layout.splitKeyboard) {
+            addNumberPadRows(main, landscape)
+        } else if (landscape && layout.splitKeyboard) {
             addSplitTextRows(main)
         } else {
-            addTextRows(main, landscape = true)
+            addTextRows(main, landscape)
         }
-        root.addView(main, LinearLayout.LayoutParams(-1, -2))
-        return root
+        return main
+    }
+
+    private fun emojiBodyLayer(normalBody: LinearLayout, categoryInHeader: Boolean): View {
+        val frame = GlideLayerFrame(this)
+        normalBody.visibility = View.INVISIBLE
+        frame.addView(normalBody, FrameLayout.LayoutParams(-1, -2))
+        frame.addView(emojiBodyOverlay(categoryInHeader), FrameLayout.LayoutParams(-1, -1))
+        return frame
+    }
+
+    private fun emojiBodyOverlay(categoryInHeader: Boolean): LinearLayout {
+        val body = keyboardBody()
+        body.background = panel(theme.panelBg, theme.border, 6, notch = true)
+        if (!categoryInHeader) {
+            body.addView(emojiCategoryRow(), rowParams(emojiCategoryHeightDp()))
+        }
+        body.addView(emojiGridScroll(), weightedRowParams())
+        body.addView(emojiControlRow(), rowParams(emojiControlHeightDp()))
+        return body
     }
 
     private fun keyboardBody(): LinearLayout {
@@ -272,6 +302,152 @@ class RetuiKeyboardService : InputMethodService() {
         body.orientation = LinearLayout.VERTICAL
         body.setPadding(dp(layout.keyGapDp), dp(layout.keyGapDp), dp(layout.keyGapDp), dp(layout.keyGapDp))
         return body
+    }
+
+    private fun emojiCategoryRow(): LinearLayout {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER
+        row.setPadding(dp(layout.keyGapDp), dp(1), dp(layout.keyGapDp), dp(1))
+        row.addView(
+            emojiActionCell("ABC", active = false, contentDescription = "Return to letters") {
+                closeEmojiMode()
+            },
+            LinearLayout.LayoutParams(0, -1, 1.2f)
+        )
+        EmojiData.CATEGORIES.forEachIndexed { index, category ->
+            row.addView(
+                emojiActionCell(category.first, active = index == emojiCategoryIndex, contentDescription = "Emoji category ${category.first}") {
+                    selectEmojiCategory(index)
+                },
+                LinearLayout.LayoutParams(0, -1, 1f)
+            )
+        }
+        row.addView(
+            emojiActionCell(ICON_BACKSPACE, active = false, contentDescription = "Backspace") {
+                backspace()
+            },
+            LinearLayout.LayoutParams(0, -1, 1.1f)
+        )
+        return row
+    }
+
+    private fun emojiGridScroll(): ScrollView {
+        val scroll = ScrollView(this)
+        scroll.isFillViewport = false
+        scroll.isVerticalScrollBarEnabled = true
+        scroll.overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+        scroll.background = ColorDrawable(Color.TRANSPARENT)
+
+        val grid = LinearLayout(this)
+        grid.orientation = LinearLayout.VERTICAL
+        grid.setPadding(dp(2), dp(2), dp(2), dp(2))
+
+        val columns = emojiColumnCount()
+        activeEmojiList().chunked(columns).forEach { emojiRow ->
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER
+            row.setPadding(dp(layout.keyGapDp), dp(1), dp(layout.keyGapDp), dp(1))
+            repeat(columns) { column ->
+                val emoji = emojiRow.getOrNull(column)
+                val cell = if (emoji != null) {
+                    emojiCell(emoji)
+                } else {
+                    View(this)
+                }
+                row.addView(cell, LinearLayout.LayoutParams(0, -1, 1f))
+            }
+            grid.addView(row, LinearLayout.LayoutParams(-1, dp(emojiCellSizeDp())))
+        }
+
+        scroll.addView(grid, FrameLayout.LayoutParams(-1, -2))
+        return scroll
+    }
+
+    private fun emojiControlRow(): LinearLayout {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER
+        row.setPadding(dp(layout.keyGapDp), dp(1), dp(layout.keyGapDp), dp(1))
+        row.addView(
+            emojiActionCell("ABC", active = false, contentDescription = "Return to letters") {
+                closeEmojiMode()
+            },
+            LinearLayout.LayoutParams(0, -1, 1.25f)
+        )
+        row.addView(
+            emojiActionCell(ICON_EMOJI, active = true, contentDescription = "Emoji keyboard") {},
+            LinearLayout.LayoutParams(0, -1, 0.9f)
+        )
+        row.addView(
+            emojiActionCell("SPACE", active = false, contentDescription = "Space") {
+                commit(" ")
+            },
+            LinearLayout.LayoutParams(0, -1, 3.6f)
+        )
+        row.addView(
+            emojiActionCell(ICON_BACKSPACE, active = false, contentDescription = "Backspace") {
+                backspace()
+            },
+            LinearLayout.LayoutParams(0, -1, 1.05f)
+        )
+        row.addView(
+            emojiActionCell(enterLabel(), active = false, contentDescription = "Enter") {
+                enter()
+            },
+            LinearLayout.LayoutParams(0, -1, 1.1f)
+        )
+        return row
+    }
+
+    private fun emojiCell(emoji: String): TextView {
+        val cell = keyLabel(emoji, Gravity.CENTER, max(22, theme.fontSizeSp + 10))
+        cell.typeface = Typeface.DEFAULT
+        cell.contentDescription = "Insert emoji $emoji"
+        cell.setTextColor(theme.keyText)
+        cell.background = keyVisualInset(panel(theme.keyBg, theme.border, 5))
+        bindTapKey(cell) {
+            commitEmoji(emoji)
+        }
+        return cell
+    }
+
+    private fun emojiActionCell(
+        label: String,
+        active: Boolean,
+        contentDescription: String,
+        action: () -> Unit
+    ): TextView {
+        val cell = keyLabel(label, Gravity.CENTER, if (label.length <= 2) max(14, theme.fontSizeSp + 2) else keyTextSize(label))
+        if (label.length <= 2) cell.typeface = Typeface.DEFAULT
+        cell.contentDescription = contentDescription
+        cell.setTextColor(if (active) theme.specialKeyText else theme.keyText)
+        cell.background = if (active) specialKeyBackground(active = true) else keyBackground(active = false)
+        bindImmediateKey(cell, action = action, dismissEmojiOnDown = false)
+        return cell
+    }
+
+    private fun activeEmojiList(): List<String> {
+        val safeIndex = emojiCategoryIndex.coerceIn(0, EmojiData.CATEGORIES.lastIndex)
+        if (safeIndex != emojiCategoryIndex) emojiCategoryIndex = safeIndex
+        return EmojiData.CATEGORIES[safeIndex].second
+    }
+
+    private fun emojiColumnCount(): Int {
+        return if (isLandscape()) 12 else 8
+    }
+
+    private fun emojiCellSizeDp(): Int {
+        return if (isLandscape()) 34 else 42
+    }
+
+    private fun emojiCategoryHeightDp(): Int {
+        return if (isLandscape()) 28 else 34
+    }
+
+    private fun emojiControlHeightDp(): Int {
+        return if (isLandscape()) 30 else 42
     }
 
     private fun glideLayer(main: LinearLayout): View {
@@ -339,6 +515,7 @@ class RetuiKeyboardService : InputMethodService() {
                     refreshSuggestionStripSoon()
                 }
                 SuggestionAction.COMMIT -> commitSuggestion(chip.word)
+                SuggestionAction.COMMIT_NEXT_WORD -> commitNextWordAfterActive(chip.word)
             }
         })
     }
@@ -351,18 +528,34 @@ class RetuiKeyboardService : InputMethodService() {
 
         if (hasActiveWord) {
             pendingAddWord = null
-            val suggestions = LocalDictionary.suggest(prefs, currentWord, 5)
-            suggestions.forEach { suggestion ->
-                out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
-            }
-            if (
-                out.size < 5 &&
-                suggestions.isEmpty() &&
-                normalized != null &&
-                normalized.length >= ACTIVE_ADD_WORD_MIN_LENGTH &&
-                !LocalDictionary.containsKnownWord(prefs, normalized)
-            ) {
-                out.add(SuggestionChip("+ ${currentWord.trim()}", normalized, SuggestionAction.ADD_WORD, 1.15f))
+            if (normalized != null && LocalDictionary.containsKnownWord(prefs, normalized)) {
+                val seen = HashSet<String>()
+                LocalDictionary.suggestCurrentWordAlternatives(prefs, currentWord, 3).forEach { suggestion ->
+                    val key = LocalDictionary.normalizeWord(suggestion) ?: suggestion.lowercase()
+                    if (seen.add("current:$key")) {
+                        out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
+                    }
+                }
+                LocalDictionary.suggestNextWords(prefs, normalized, 2).forEach { suggestion ->
+                    val key = LocalDictionary.normalizeWord(suggestion) ?: suggestion.lowercase()
+                    if (seen.add("next:$key")) {
+                        out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT_NEXT_WORD, 1f))
+                    }
+                }
+            } else {
+                val suggestions = LocalDictionary.suggest(prefs, currentWord, 5)
+                suggestions.forEach { suggestion ->
+                    out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
+                }
+                if (
+                    out.size < 5 &&
+                    suggestions.isEmpty() &&
+                    normalized != null &&
+                    normalized.length >= ACTIVE_ADD_WORD_MIN_LENGTH &&
+                    !LocalDictionary.containsKnownWord(prefs, normalized)
+                ) {
+                    out.add(SuggestionChip("+ ${currentWord.trim()}", normalized, SuggestionAction.ADD_WORD, 1.15f))
+                }
             }
         } else {
             val pending = pendingAddWord
@@ -547,7 +740,7 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun addSplitBottomRow(parent: LinearLayout, heightDp: Int) {
         val right = mutableListOf<KeySpec>()
-        if (layout.quickPeriod) right.add(KeySpec(".", 0.9f, text = "."))
+        if (layout.quickPeriod) right.add(periodKey(0.9f))
         right.add(enterKey(1.35f))
         addSplitKeyRow(
             parent = parent,
@@ -667,7 +860,7 @@ class RetuiKeyboardService : InputMethodService() {
             KeySpec("SPACE", if (layout.quickPeriod) 4.8f else 5.55f, Special.SPACE)
         )
         if (layout.quickPeriod) {
-            out.add(KeySpec(".", 0.75f, text = "."))
+            out.add(periodKey(0.75f))
         }
         out.add(enterKey(1.45f))
         return out
@@ -701,7 +894,7 @@ class RetuiKeyboardService : InputMethodService() {
             listOf(
                 KeySpec("#+", 1f, Special.SYMBOLS),
                 KeySpec("0", 1f, text = "0"),
-                KeySpec(".", 1f, text = ".")
+                periodKey()
             )
         )
     }
@@ -710,7 +903,7 @@ class RetuiKeyboardService : InputMethodService() {
         return listOf(
             listOf("/", "-", "_").map { KeySpec(it, text = it) },
             listOf("'", "\"", ":").map { KeySpec(it, text = it) },
-            listOf(commaKey(), KeySpec(".", text = "."), KeySpec("?", text = "?")),
+            listOf(commaKey(), periodKey(), KeySpec("?", text = "?")),
             listOf(
                 KeySpec("ABC", 1f, Special.SYMBOLS),
                 KeySpec("@", 1f, text = "@"),
@@ -744,7 +937,7 @@ class RetuiKeyboardService : InputMethodService() {
             listOf(
                 commaKey(),
                 KeySpec("0", text = "0"),
-                KeySpec(".", text = "."),
+                periodKey(),
                 enterKey()
             )
         )
@@ -826,6 +1019,10 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun commaKey(weight: Float = 1f): KeySpec {
         return KeySpec(",", weight, text = ",", longLabel = ICON_SETTINGS, longSpecial = Special.SETTINGS)
+    }
+
+    private fun periodKey(weight: Float = 1f): KeySpec {
+        return KeySpec(".", weight, text = ".", longLabel = ICON_EMOJI, longSpecial = Special.EMOJI_PICKER)
     }
 
     private fun enterKey(weight: Float = 1f): KeySpec {
@@ -951,7 +1148,6 @@ class RetuiKeyboardService : InputMethodService() {
             !symbols &&
             !usesNumberPad() &&
             !hasLatchedModifiers() &&
-            !isShiftActive() &&
             key.special == null &&
             text.length == 1 &&
             text[0].isLetter()
@@ -1033,7 +1229,12 @@ class RetuiKeyboardService : InputMethodService() {
         return view
     }
 
-    private fun bindImmediateKey(view: View, action: () -> Unit, repeatAction: (() -> Unit)? = null) {
+    private fun bindImmediateKey(
+        view: View,
+        action: () -> Unit,
+        repeatAction: (() -> Unit)? = null,
+        dismissEmojiOnDown: Boolean = true
+    ) {
         view.isClickable = true
         view.isFocusable = false
         view.setOnTouchListener { touched, event ->
@@ -1041,6 +1242,7 @@ class RetuiKeyboardService : InputMethodService() {
                 MotionEvent.ACTION_DOWN -> {
                     touched.isPressed = true
                     pressFeedback(touched)
+                    if (dismissEmojiOnDown && emojiMode) closeEmojiMode()
                     action()
                     repeatAction?.let { startRepeat(it) }
                     true
@@ -1053,6 +1255,15 @@ class RetuiKeyboardService : InputMethodService() {
                 }
                 else -> true
             }
+        }
+    }
+
+    private fun bindTapKey(view: View, action: () -> Unit) {
+        view.isClickable = true
+        view.isFocusable = false
+        view.setOnClickListener { clicked ->
+            pressFeedback(clicked)
+            action()
         }
     }
 
@@ -1088,6 +1299,7 @@ class RetuiKeyboardService : InputMethodService() {
         view.setOnTouchListener { touched, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    if (emojiMode) closeEmojiMode()
                     downRawX = event.rawX
                     downRawY = event.rawY
                     activeKeyCode = null
@@ -1196,10 +1408,11 @@ class RetuiKeyboardService : InputMethodService() {
                     longPressHandled = false
                     primaryCommitted = false
                     accentIndex = 0
-	                    glideTracking = false
-	                    glideTrace.clear()
-	                    glidePoints.clear()
-	                    clearGlideTrail()
+                    glideTracking = false
+                    glideTrace.clear()
+                    glidePoints.clear()
+                    clearGlideTrail()
+                    clearPopup()
                     downRawX = event.rawX
                     downRawY = event.rawY
                     touched.isPressed = true
@@ -1215,6 +1428,8 @@ class RetuiKeyboardService : InputMethodService() {
                             accentIndex = 0
                             accentPopup = showAccentVariantPicker(view, key.accentVariants)
                             updateAccentSelection(downRawX)
+                        } else if (key.longSpecial == Special.EMOJI_PICKER) {
+                            openEmojiMode()
                         } else {
                             popup = showLongPressPreview(view, key)
                             handleLongKey(key)
@@ -1232,18 +1447,18 @@ class RetuiKeyboardService : InputMethodService() {
                             longPressRunnable?.let { repeatHandler.removeCallbacks(it) }
                             longPressRunnable = null
                             glideTracking = true
-	                            touched.isPressed = false
-	                            appendGlideHit(glideTrace, downRawX, downRawY)
-	                            appendGlidePoint(glidePoints, downRawX, downRawY)
-	                            beginGlideTrail(downRawX, downRawY)
+                            touched.isPressed = false
+                            appendGlideHit(glideTrace, downRawX, downRawY)
+                            appendGlidePoint(glidePoints, downRawX, downRawY)
+                            beginGlideTrail(downRawX, downRawY)
                             if (layout.vibrateOnKeypress) {
                                 vibrateKey(touched, HapticFeedbackConstants.KEYBOARD_TAP, durationMs = 6L)
                             }
                         }
-	                        if (glideTracking) {
-	                            appendGlideHit(glideTrace, event.rawX, event.rawY)
-	                            appendGlidePoint(glidePoints, event.rawX, event.rawY)
-	                            extendGlideTrail(event.rawX, event.rawY)
+                        if (glideTracking) {
+                            appendGlideHit(glideTrace, event.rawX, event.rawY)
+                            appendGlidePoint(glidePoints, event.rawX, event.rawY)
+                            extendGlideTrail(event.rawX, event.rawY)
                             return@setOnTouchListener true
                         }
                     }
@@ -1255,45 +1470,48 @@ class RetuiKeyboardService : InputMethodService() {
                 MotionEvent.ACTION_UP -> {
                     longPressRunnable?.let { repeatHandler.removeCallbacks(it) }
                     longPressRunnable = null
-	                    if (glideTracking) {
-	                        appendGlideHit(glideTrace, event.rawX, event.rawY)
-	                        appendGlidePoint(glidePoints, event.rawX, event.rawY)
-	                        extendGlideTrail(event.rawX, event.rawY)
-	                        touched.isPressed = false
-	                        commitGlideTrace(glideTrace, glidePoints)
-	                        finishGlideTrail()
-	                        glideTracking = false
-	                        glideTrace.clear()
-	                        glidePoints.clear()
-	                        true
+                    if (glideTracking) {
+                        appendGlideHit(glideTrace, event.rawX, event.rawY)
+                        appendGlidePoint(glidePoints, event.rawX, event.rawY)
+                        extendGlideTrail(event.rawX, event.rawY)
+                        touched.isPressed = false
+                        commitGlideTrace(glideTrace, glidePoints)
+                        finishGlideTrail()
+                        glideTracking = false
+                        glideTrace.clear()
+                        glidePoints.clear()
+                        true
                     } else {
-                    val selectedAccent = if (longPressHandled && key.accentVariants.isNotEmpty()) {
-                        key.accentVariants.getOrNull(accentIndex)
-                    } else {
-                        null
-                    }
-                    clearPopup()
-                    touched.isPressed = false
-                    if (selectedAccent != null) {
-                        commitFromKey(selectedAccent)
-                    } else if (longPressHandled) {
-                        // Long-press action already fired at timeout for better touch latency.
-                    } else if (!primaryCommitted) {
-                        handleKey(key)
-                    } else {
-                        refreshSuggestionStripSoon()
-                    }
-                    true
+                        val selectedAccent = if (longPressHandled && key.accentVariants.isNotEmpty()) {
+                            key.accentVariants.getOrNull(accentIndex)
+                        } else {
+                            null
+                        }
+                        touched.isPressed = false
+                        if (selectedAccent != null) {
+                            clearPopup()
+                            commitFromKey(selectedAccent)
+                        } else if (longPressHandled) {
+                            // Long-press action already fired at timeout for better touch latency.
+                            clearPopup()
+                        } else if (!primaryCommitted) {
+                            clearPopup()
+                            handleKey(key)
+                        } else {
+                            clearPopup()
+                            refreshSuggestionStripSoon()
+                        }
+                        true
                     }
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     longPressRunnable?.let { repeatHandler.removeCallbacks(it) }
                     longPressRunnable = null
-	                    clearPopup()
-	                    glideTracking = false
-	                    glideTrace.clear()
-	                    glidePoints.clear()
-	                    clearGlideTrail()
+                    clearPopup()
+                    glideTracking = false
+                    glideTrace.clear()
+                    glidePoints.clear()
+                    clearGlideTrail()
                     touched.isPressed = false
                     true
                 }
@@ -1892,7 +2110,9 @@ class RetuiKeyboardService : InputMethodService() {
             imeAction = (info?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION,
             usesNumberPad = usesNumberPad(info),
             offersSuggestions = shouldOfferSuggestions(nextLayout, info),
-            symbols = symbols
+            symbols = symbols,
+            emojiMode = emojiMode,
+            emojiCategoryIndex = emojiCategoryIndex
         )
     }
 
@@ -1960,6 +2180,12 @@ class RetuiKeyboardService : InputMethodService() {
         val minHeight = if (isLandscape()) 24 else 28
         val scaledHeight = max(minHeight, (heightDp * heightPercent / 100f).roundToInt())
         val params = LinearLayout.LayoutParams(-1, dp(scaledHeight))
+        params.setMargins(0, 0, 0, dp(layout.keyGapDp))
+        return params
+    }
+
+    private fun weightedRowParams(): LinearLayout.LayoutParams {
+        val params = LinearLayout.LayoutParams(-1, 0, 1f)
         params.setMargins(0, 0, 0, dp(layout.keyGapDp))
         return params
     }
@@ -2047,6 +2273,7 @@ class RetuiKeyboardService : InputMethodService() {
             Special.SUPER -> toggleModifier(Special.SUPER)
             Special.DIRECTION_PAD -> Unit
             Special.SHIFT_ENTER -> sendShiftEnter()
+            Special.EMOJI_PICKER -> openEmojiMode()
             Special.SETTINGS -> openKeyboardSettings()
             Special.HIDE -> requestHideSelf(0)
             Special.SPACER, null -> {
@@ -2066,9 +2293,36 @@ class RetuiKeyboardService : InputMethodService() {
         when {
             key.longSpecial == Special.SETTINGS -> openKeyboardSettings()
             key.longSpecial == Special.SHIFT_ENTER -> sendShiftEnter()
+            key.longSpecial == Special.EMOJI_PICKER -> openEmojiMode()
             key.longKeyCode != null -> sendKeyCode(key.longKeyCode)
             key.longText != null -> commitFromKey(key.longText)
         }
+    }
+
+    private fun openEmojiMode() {
+        stopRepeat()
+        cancelSuggestionRefresh()
+        symbols = false
+        shifted = false
+        capsLocked = false
+        clearLatchedModifiers()
+        emojiMode = true
+        emojiCategoryIndex = emojiCategoryIndex.coerceIn(0, EmojiData.CATEGORIES.lastIndex)
+        setInputView(buildKeyboardView())
+    }
+
+    private fun closeEmojiMode() {
+        if (!emojiMode) return
+        emojiMode = false
+        setInputView(buildKeyboardView())
+        refreshSuggestionStripSoon()
+    }
+
+    private fun selectEmojiCategory(index: Int) {
+        val safeIndex = index.coerceIn(0, EmojiData.CATEGORIES.lastIndex)
+        if (safeIndex == emojiCategoryIndex) return
+        emojiCategoryIndex = safeIndex
+        setInputView(buildKeyboardView())
     }
 
     private fun sendShiftEnter() {
@@ -2158,6 +2412,13 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun commit(value: String) {
         currentInputConnection?.commitText(value, 1)
+    }
+
+    private fun commitEmoji(value: String) {
+        currentInputConnection?.commitText(value, 1)
+        localWordBeforeCursor = ""
+        pendingAddWord = null
+        refreshSuggestionStripSoon()
     }
 
     private fun commitFromKey(value: String) {
@@ -2298,6 +2559,23 @@ class RetuiKeyboardService : InputMethodService() {
         pendingAddWord = null
         localWordBeforeCursor = ""
         LocalDictionary.recordAcceptedWord(prefs, word)
+        if (shifted && !capsLocked) {
+            shifted = false
+            lastShiftTapAtMs = 0L
+            setInputView(buildKeyboardView())
+        } else {
+            refreshSuggestionStripSoon()
+        }
+    }
+
+    private fun commitNextWordAfterActive(word: String) {
+        val normalized = LocalDictionary.normalizeWord(word) ?: return
+        val ic = currentInputConnection ?: return
+        learnFinishedWord(currentWordBeforeCursor())
+        ic.commitText(" ${LocalDictionary.displayWord(normalized)} ", 1)
+        pendingAddWord = null
+        localWordBeforeCursor = ""
+        LocalDictionary.recordAcceptedWord(prefs, normalized)
         if (shifted && !capsLocked) {
             shifted = false
             lastShiftTapAtMs = 0L
@@ -2559,6 +2837,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun refreshSuggestionStrip() {
+        if (emojiMode) return
         val offersSuggestions = shouldOfferSuggestions()
         if (offersSuggestions != (suggestionStrip != null)) {
             setInputView(buildKeyboardView())
@@ -2657,6 +2936,8 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun resetTransientLayoutState() {
+        emojiMode = false
+        emojiCategoryIndex = 0
         symbols = false
         shifted = false
         capsLocked = false
@@ -3264,7 +3545,9 @@ class RetuiKeyboardService : InputMethodService() {
         val imeAction: Int,
         val usesNumberPad: Boolean,
         val offersSuggestions: Boolean,
-        val symbols: Boolean
+        val symbols: Boolean,
+        val emojiMode: Boolean,
+        val emojiCategoryIndex: Int
     )
 
     private data class SuggestionChip(
@@ -3287,7 +3570,8 @@ class RetuiKeyboardService : InputMethodService() {
 
     private enum class SuggestionAction {
         ADD_WORD,
-        COMMIT
+        COMMIT,
+        COMMIT_NEXT_WORD
     }
 
     private enum class Special {
@@ -3302,6 +3586,7 @@ class RetuiKeyboardService : InputMethodService() {
         SUPER,
         DIRECTION_PAD,
         SHIFT_ENTER,
+        EMOJI_PICKER,
         SETTINGS,
         HIDE,
         SPACER
@@ -3602,6 +3887,7 @@ class RetuiKeyboardService : InputMethodService() {
         private const val ICON_DONE = "✓"
         private const val ICON_DPAD = "↕↔"
         private const val ICON_DOWN = "↓"
+        private const val ICON_EMOJI = "☺"
         private const val ICON_ENTER = "↵"
         private const val ICON_ENTER_GO = "→"
         private const val ICON_ESCAPE = "ESC"

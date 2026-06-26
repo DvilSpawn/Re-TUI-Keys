@@ -25,6 +25,7 @@ object LocalDictionary {
 
     private val builtInWords = listOf(
         "i", "hi", "the", "and", "you", "that", "have", "for", "not", "with", "this", "but", "from",
+        "in", "of", "on", "at", "as", "is", "be", "by", "or", "if", "so", "up", "us",
         "they", "say", "her", "she", "will", "one", "all", "would", "there", "their",
         "what", "about", "which", "when", "make", "can", "like", "time", "just", "know",
         "take", "people", "into", "year", "your", "good", "some", "could", "them", "see",
@@ -64,7 +65,8 @@ object LocalDictionary {
     private val glideProtectedShortWords = setOf(
         "hi", "how", "are", "you", "app", "the", "and", "for", "not", "but", "can", "its",
         "our", "day", "was", "new", "now", "did", "had", "has", "use", "see", "all", "one",
-        "two", "it", "to", "we", "am", "me", "my"
+        "two", "it", "to", "we", "am", "me", "my", "in", "of", "on", "at", "as", "is",
+        "be", "by", "or", "if", "so", "up", "us"
     )
     private val glideCommonWordBoost = glideCalibrationWords.associateWith { word ->
         when {
@@ -111,6 +113,11 @@ object LocalDictionary {
         "wouldnt" to "wouldn't",
         "youre" to "you're"
     )
+    private val staticCurrentWordAlternatives = mapOf(
+        "will" to listOf("well"),
+        "well" to listOf("will")
+    ).mapKeys { normalizeWord(it.key) ?: it.key }
+        .mapValues { entry -> entry.value.mapNotNull { normalizeWord(it) } }
     private val staticBigrams = mapOf(
         "good" to listOf("morning", "luck", "job", "night"),
         "thank" to listOf("you"),
@@ -122,9 +129,10 @@ object LocalDictionary {
         "i'll" to listOf("check", "send", "update"),
         "i" to listOf("will", "am", "have"),
         "we" to listOf("can", "should", "will"),
+        "will" to listOf("you", "know", "be", "have"),
         "you" to listOf("can", "should", "will", "there", "free", "doing", "soon", "later"),
         "going" to listOf("to"),
-        "the" to listOf("settings", "keyboard", "launcher"),
+        "the" to listOf("app", "settings", "keyboard", "launcher"),
         "open" to listOf("the", "settings", "keyboard", "launcher"),
         "check" to listOf("the", "this"),
         "send" to listOf("this", "the"),
@@ -238,6 +246,50 @@ object LocalDictionary {
             .map { formatSuggestion(rawPrefix, it.word) }
     }
 
+    fun suggestCurrentWordAlternatives(prefs: SharedPreferences, rawWord: String, limit: Int): List<String> {
+        val safeLimit = limit.coerceIn(1, 5)
+        val word = normalizeWord(rawWord) ?: return emptyList()
+        val searchWord = searchKey(word)
+        if (searchWord.isBlank()) return emptyList()
+
+        val userWords = readEntries(prefs)
+        val isKnownWord = isStaticWord(word) || userWords.any { it.word == word }
+        if (!isKnownWord) return emptyList()
+
+        val ranked = LinkedHashMap<String, RankedCandidate>()
+
+        fun offer(candidate: String, score: Int) {
+            val normalized = normalizeWord(candidate) ?: return
+            val searchCandidate = searchKey(normalized)
+            if (abs(searchCandidate.length - searchWord.length) > 1) return
+            val distance = editDistanceAtMost(searchWord, searchCandidate, 1)
+            if (distance !in 0..1) return
+            val adjustedScore = score - (distance * 32_000)
+            val current = ranked[normalized]
+            if (current == null || adjustedScore > current.score) {
+                ranked[normalized] = RankedCandidate(normalized, adjustedScore)
+            }
+        }
+
+        offer(word, 260_000)
+
+        staticCurrentWordAlternatives[word].orEmpty().forEachIndexed { index, candidate ->
+            offer(candidate, 235_000 - (index * 8_000))
+        }
+
+        staticTypoCandidates(searchWord, maxDistance = 1).forEach { entry ->
+            offer(entry.word, 125_000 + (entry.weight / 4))
+        }
+        userWords.forEach { entry ->
+            offer(entry.word, 145_000 + (entry.frequency * 1_200).coerceAtMost(24_000))
+        }
+
+        return ranked.values
+            .sortedWith(compareByDescending<RankedCandidate> { it.score }.thenBy { it.word })
+            .take(safeLimit)
+            .map { formatSuggestion(rawWord, it.word) }
+    }
+
     fun suggestNextWords(prefs: SharedPreferences, rawPreviousWord: String?, limit: Int): List<String> {
         val previous = normalizeWord(rawPreviousWord ?: return emptyList()) ?: return emptyList()
         val safeLimit = limit.coerceIn(1, 5)
@@ -318,7 +370,7 @@ object LocalDictionary {
             if (
                 startChar != null &&
                 key.firstOrNull() != startChar &&
-                !allowsContextStartKeyMismatch(key, languageScore, points.first(), keyCenters, diagonal)
+                !allowsStartKeyMismatch(key, languageScore, points.first(), keyCenters, diagonal)
             ) return
             val score = glideGeometryScore(
                 trace = trace,
@@ -624,7 +676,7 @@ object LocalDictionary {
         languageScore: Int
     ): Int {
         if (word.length < 2 || trace.length < 2) return 0
-        if (trace.length > 5 && word.length <= 2 && languageScore <= 0) return 0
+        if (trace.length > 5 && word.length <= 2 && languageScore <= 0 && word !in glideProtectedShortWords) return 0
         if (startChar != null && word.first() != startChar && languageScore <= 0) return 0
         if (startChar == null && word.first() != trace.first()) return 0
 
@@ -640,7 +692,11 @@ object LocalDictionary {
         val meanDistance = sumDistance / input.size
         val startDistance = distance(input.first(), sampledWord.first()) / diagonal
         val endDistance = distance(input.last(), sampledWord.last()) / diagonal
-        val coverage = noisyTraceCoverage(trace, word)
+        val traceCoverage = noisyTraceCoverage(trace, word)
+        val shapeCoverage = geometricTraceCoverage(wordPath, input, diagonal)
+        val coverage = maxOf(traceCoverage, shapeCoverage)
+        val startKeyMismatch = startChar != null && word.first() != startChar
+        if (startKeyMismatch && word.length <= 3 && trace.length >= 5 && traceCoverage == 0) return 0
         val isCalibrationWord = word in glideCalibrationWords
         val isProtectedShortWord = word in glideProtectedShortWords
         val isBuiltInWord = word in builtInSet
@@ -658,20 +714,26 @@ object LocalDictionary {
         score += glideCommonWordBoost[word] ?: 0
         score += if (isBuiltInWord) 240_000 else 0
         score += coverage * 38_000
+        score += ((1f - (meanDistance / 0.16f)).coerceIn(0f, 1f) * 460_000).toInt()
         score += if (word == trace) 1_000_000 else 0
+        score += if (shapeCoverage == wordPath.size && meanDistance <= 0.06f) 560_000 else 0
         score += if (word.length == 2 && isProtectedShortWord) 420_000 else 0
         score += if (word.length <= 3 && coverage == word.length && isProtectedShortWord) 360_000 else 0
         score += if (word.length == 4 && coverage == word.length) 240_000 else 0
+        if (startKeyMismatch) {
+            score -= if (languageScore > 0) 40_000 else 180_000
+        }
         score += when (word) {
             "talk" -> if (('k' in trace || 'l' in trace) && !('y' in trace && 'h' in trace)) 1_400_000 else 0
-            "thank" -> if ('y' in trace && 'h' in trace) 1_500_000 else if ('h' in trace || 'n' in trace || 'k' in trace) 900_000 else 420_000
+            "thank" -> if ('y' in trace && 'h' in trace && trace.lastOrNull() != 'e') 1_500_000 else if ('n' in trace || 'k' in trace || ('h' in trace && trace.lastOrNull() != 'e')) 900_000 else 420_000
             "morning" -> if (trace.firstOrNull() in setOf('m', 'n') && trace.length >= 12) 1_550_000 else 260_000
             "night" -> if (trace.firstOrNull() in setOf('b', 'v') || (trace.firstOrNull() == 'n' && trace.length <= 10)) 1_500_000 else 180_000
-            "the" -> if (trace.firstOrNull() == 't' && 'k' !in trace && 'n' !in trace && trace.length <= 8) 820_000 else 0
+            "the" -> if (trace.firstOrNull() == 't' && 'k' !in trace && 'n' !in trace && trace.length <= 8) 1_120_000 else 0
             "it" -> if (languageScore > 0) 1_200_000 else 420_000
             "things" -> if (languageScore > 0) 900_000 else 0
-            "thanks" -> if (trace.lastOrNull() in setOf('s', 'z') || languageScore > 0) 980_000 else 520_000
-            "open", "see", "app", "am", "doing", "update", "works" -> 520_000
+            "thanks" -> if (trace.lastOrNull() == 'e') 0 else if (trace.lastOrNull() in setOf('s', 'z') || trace.length >= 16 || languageScore > 0) 980_000 else 520_000
+            "open" -> if (trace.length >= 8 || 'p' in trace || 'n' in trace || languageScore > 0) 520_000 else 0
+            "see", "app", "doing", "update", "works" -> 520_000
             else -> 0
         }
         if ('\'' in word && word.length <= 4) {
@@ -686,6 +748,9 @@ object LocalDictionary {
         if (trace.length >= 6 && word.length <= 3 && !isProtectedShortWord) {
             score -= 760_000
         }
+        if (trace.length - word.length >= 6 && word.length <= 3 && isProtectedShortWord && languageScore == 0) {
+            score -= (trace.length - word.length - 5) * 220_000
+        }
         if (trace.length >= 9 && word.length <= 4 && !isCalibrationWord && !isProtectedShortWord) {
             score -= 360_000
         }
@@ -698,7 +763,7 @@ object LocalDictionary {
         return score
     }
 
-    private fun allowsContextStartKeyMismatch(
+    private fun allowsStartKeyMismatch(
         word: String,
         languageScore: Int,
         firstPoint: GlidePoint,
@@ -707,7 +772,8 @@ object LocalDictionary {
     ): Boolean {
         if (languageScore <= 0) return false
         val firstKeyCenter = keyCenters[word.first()] ?: return false
-        return distance(firstPoint, firstKeyCenter) / diagonal <= 0.24f
+        val normalizedDistance = distance(firstPoint, firstKeyCenter) / diagonal
+        return normalizedDistance <= 0.13f
     }
 
     private fun normalizeContextWords(words: List<String>): List<String> {
@@ -765,6 +831,34 @@ object LocalDictionary {
         val dx = left.x - right.x
         val dy = left.y - right.y
         return sqrt((dx * dx) + (dy * dy))
+    }
+
+    private fun geometricTraceCoverage(wordPath: List<GlidePoint>, input: List<GlidePoint>, diagonal: Float): Int {
+        if (wordPath.isEmpty() || input.isEmpty()) return 0
+        val threshold = diagonal * 0.09f
+        return wordPath.count { point -> distanceToPath(point, input) <= threshold }
+    }
+
+    private fun distanceToPath(point: GlidePoint, path: List<GlidePoint>): Float {
+        if (path.size == 1) return distance(point, path.first())
+        var best = Float.MAX_VALUE
+        for (index in 1 until path.size) {
+            best = minOf(best, distanceToSegment(point, path[index - 1], path[index]))
+        }
+        return best
+    }
+
+    private fun distanceToSegment(point: GlidePoint, start: GlidePoint, end: GlidePoint): Float {
+        val dx = end.x - start.x
+        val dy = end.y - start.y
+        val lengthSquared = (dx * dx) + (dy * dy)
+        if (lengthSquared <= 0f) return distance(point, start)
+        val projection = (((point.x - start.x) * dx) + ((point.y - start.y) * dy)) / lengthSquared
+        val clamped = projection.coerceIn(0f, 1f)
+        return distance(
+            point,
+            GlidePoint(start.x + (dx * clamped), start.y + (dy * clamped))
+        )
     }
 
     private fun glideScore(trace: String, word: String, baseScore: Int): Int {
