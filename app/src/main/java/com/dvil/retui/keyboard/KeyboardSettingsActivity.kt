@@ -441,6 +441,22 @@ class KeyboardSettingsActivity : ComponentActivity() {
         )
         addTerminalToggle(
             parent = list,
+            label = getString(R.string.setting_clipboard_auto_save),
+            summary = getString(R.string.setting_clipboard_auto_save_summary),
+            key = KeyboardPrefs.KEY_CLIPBOARD_AUTO_SAVE,
+            defaultValue = KeyboardPrefs.DEFAULT_CLIPBOARD_AUTO_SAVE
+        )
+        addTerminalControl(
+            parent = list,
+            label = getString(R.string.setting_clipboard_retention_days),
+            key = KeyboardPrefs.KEY_CLIPBOARD_RETENTION_DAYS,
+            min = 1,
+            max = 365,
+            defaultValue = KeyboardPrefs.DEFAULT_CLIPBOARD_RETENTION_DAYS,
+            suffix = getString(R.string.setting_clipboard_retention_suffix)
+        )
+        addTerminalToggle(
+            parent = list,
             label = getString(R.string.setting_delete_whole_word),
             summary = getString(R.string.setting_delete_whole_word_summary),
             key = KeyboardPrefs.KEY_DELETE_WHOLE_WORD,
@@ -482,6 +498,15 @@ class KeyboardSettingsActivity : ComponentActivity() {
         addDictionaryControls(list)
 
         addSectionLabel(list, "THEME")
+        addTerminalToggle(
+            parent = list,
+            label = getString(R.string.setting_cyberdeck_mode),
+            summary = getString(R.string.setting_cyberdeck_mode_summary),
+            key = THEME_OVERRIDE_PREFIX + "cyberdeckMode",
+            defaultValue = SettingsTheme.DEFAULT.cyberdeckMode,
+            initialValue = theme.cyberdeckMode,
+            onChanged = ::saveCyberdeckMode
+        )
         addThemeColorControls(list)
 
         val imageLabel = terminalLabel("BACKGROUND: ${backgroundLabel()}", 12f, bold = true)
@@ -532,9 +557,11 @@ class KeyboardSettingsActivity : ComponentActivity() {
         label: String,
         summary: String,
         key: String,
-        defaultValue: Boolean
+        defaultValue: Boolean,
+        initialValue: Boolean? = null,
+        onChanged: ((Boolean) -> Unit)? = null
     ) {
-        var enabled = prefs.getBoolean(key, defaultValue)
+        var enabled = initialValue ?: prefs.getBoolean(key, defaultValue)
 
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
@@ -592,14 +619,14 @@ class KeyboardSettingsActivity : ComponentActivity() {
             val next = !enabled
             if (key == KeyboardPrefs.KEY_GLIDE_TYPING && next) {
                 showGlideTypingWarning {
-                    prefs.edit().putBoolean(key, true).apply()
+                    if (onChanged == null) prefs.edit().putBoolean(key, true).apply() else onChanged(true)
                     render(true)
-                    refreshKeyboard()
+                    if (onChanged == null) refreshKeyboard()
                 }
             } else {
-                prefs.edit().putBoolean(key, next).apply()
+                if (onChanged == null) prefs.edit().putBoolean(key, next).apply() else onChanged(next)
                 render(next)
-                refreshKeyboard()
+                if (onChanged == null) refreshKeyboard()
             }
         }
         render(enabled)
@@ -724,9 +751,9 @@ class KeyboardSettingsActivity : ComponentActivity() {
 
     private fun addThemeColorControls(parent: LinearLayout) {
         val source = when {
-            prefs.getBoolean(KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN, false) -> "COLOR SOURCE: KEYBOARD OVERRIDE"
-            prefs.getBoolean(KeyboardPrefs.KEY_THEME_LAUNCHER_AVAILABLE, false) -> "COLOR SOURCE: RETUI LAUNCHER"
-            else -> "COLOR SOURCE: KEYBOARD DEFAULT"
+            prefs.getBoolean(KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN, false) -> "THEME SOURCE: KEYBOARD OVERRIDE"
+            prefs.getBoolean(KeyboardPrefs.KEY_THEME_LAUNCHER_AVAILABLE, false) -> "THEME SOURCE: RETUI LAUNCHER"
+            else -> "THEME SOURCE: KEYBOARD DEFAULT"
         }
         val sourceLabel = terminalLabel(source, 12f, bold = true)
         sourceLabel.setTextColor(theme.accent)
@@ -917,6 +944,16 @@ class KeyboardSettingsActivity : ComponentActivity() {
         theme = saved
         themeDraft = saved
         toast("KEYBOARD COLORS SAVED")
+        configureWindow()
+        rebuildRows()
+        refreshKeyboard()
+    }
+
+    private fun saveCyberdeckMode(enabled: Boolean) {
+        val saved = deriveSettingsTheme(theme.copy(cyberdeckMode = enabled))
+        saveSettingsTheme(saved, overrideColors = true)
+        theme = saved
+        themeDraft = saved
         configureWindow()
         rebuildRows()
         refreshKeyboard()

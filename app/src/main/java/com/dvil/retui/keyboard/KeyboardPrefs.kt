@@ -8,7 +8,9 @@ object KeyboardPrefs {
     const val KEY_BACKGROUND_IMAGE_OPACITY = "layout.backgroundImageOpacity"
     const val KEY_BACKGROUND_IMAGE_URI = "layout.backgroundImageUri"
     const val KEY_BOTTOM_MARGIN_DP = "layout.bottomMarginDp"
+    const val KEY_CLIPBOARD_AUTO_SAVE = "clipboard.autoSave"
     const val KEY_CHARACTER_SIZE_SP = "layout.characterSizeSp"
+    const val KEY_CLIPBOARD_RETENTION_DAYS = "clipboard.retentionDays"
     const val KEY_CORNER_RADIUS_DP = "layout.cornerRadiusDp"
     const val KEY_HEIGHT_PERCENT = "layout.heightPercent"
     const val KEY_HORIZONTAL_MARGIN_DP = "layout.horizontalMarginDp"
@@ -37,7 +39,9 @@ object KeyboardPrefs {
 
     const val DEFAULT_BACKGROUND_IMAGE_OPACITY = 55
     const val DEFAULT_BOTTOM_MARGIN_DP = 4
+    const val DEFAULT_CLIPBOARD_AUTO_SAVE = true
     const val DEFAULT_CHARACTER_SIZE_SP = 14
+    const val DEFAULT_CLIPBOARD_RETENTION_DAYS = 30
     const val DEFAULT_CORNER_RADIUS_DP = 0
     const val DEFAULT_HEIGHT_PERCENT = 100
     const val DEFAULT_HORIZONTAL_MARGIN_DP = 4
@@ -69,7 +73,12 @@ object KeyboardPrefs {
             ).coerceIn(0, 100),
             backgroundImageUri = prefs.getString(KEY_BACKGROUND_IMAGE_URI, null)?.takeIf { it.isNotBlank() },
             bottomMarginDp = prefs.getInt(KEY_BOTTOM_MARGIN_DP, legacyMargin).coerceIn(-64, 64),
+            clipboardAutoSave = prefs.getBoolean(KEY_CLIPBOARD_AUTO_SAVE, DEFAULT_CLIPBOARD_AUTO_SAVE),
             characterSizeSp = prefs.getInt(KEY_CHARACTER_SIZE_SP, DEFAULT_CHARACTER_SIZE_SP).coerceIn(10, 24),
+            clipboardRetentionDays = prefs.getInt(
+                KEY_CLIPBOARD_RETENTION_DAYS,
+                DEFAULT_CLIPBOARD_RETENTION_DAYS
+            ).coerceIn(1, 365),
             cornerRadiusDp = prefs.getInt(KEY_CORNER_RADIUS_DP, DEFAULT_CORNER_RADIUS_DP).coerceIn(0, 18),
             horizontalMarginDp = prefs.getInt(KEY_HORIZONTAL_MARGIN_DP, legacyMargin).coerceIn(0, 48),
             keyGapDp = prefs.getInt(KEY_KEY_GAP_DP, DEFAULT_KEY_GAP_DP).coerceIn(0, 8),
@@ -106,7 +115,9 @@ object KeyboardPrefs {
             .putInt(KEY_BACKGROUND_IMAGE_OPACITY, DEFAULT_BACKGROUND_IMAGE_OPACITY)
             .remove(KEY_BACKGROUND_IMAGE_URI)
             .putInt(KEY_BOTTOM_MARGIN_DP, DEFAULT_BOTTOM_MARGIN_DP)
+            .putBoolean(KEY_CLIPBOARD_AUTO_SAVE, DEFAULT_CLIPBOARD_AUTO_SAVE)
             .putInt(KEY_CHARACTER_SIZE_SP, DEFAULT_CHARACTER_SIZE_SP)
+            .putInt(KEY_CLIPBOARD_RETENTION_DAYS, DEFAULT_CLIPBOARD_RETENTION_DAYS)
             .putInt(KEY_CORNER_RADIUS_DP, DEFAULT_CORNER_RADIUS_DP)
             .putInt(KEY_HORIZONTAL_MARGIN_DP, DEFAULT_HORIZONTAL_MARGIN_DP)
             .putInt(KEY_KEY_GAP_DP, DEFAULT_KEY_GAP_DP)
@@ -217,7 +228,9 @@ data class KeyboardLayoutSettings(
     val backgroundImageOpacity: Int,
     val backgroundImageUri: String?,
     val bottomMarginDp: Int,
+    val clipboardAutoSave: Boolean,
     val characterSizeSp: Int,
+    val clipboardRetentionDays: Int,
     val cornerRadiusDp: Int,
     val horizontalMarginDp: Int,
     val keyGapDp: Int,

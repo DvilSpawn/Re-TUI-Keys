@@ -1,5 +1,6 @@
 package com.dvil.retui.keyboard
 
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.res.Configuration
@@ -32,6 +33,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.Settings
+import android.text.TextUtils
 import android.text.InputType
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -63,7 +65,9 @@ class RetuiKeyboardService : InputMethodService() {
         backgroundImageOpacity = KeyboardPrefs.DEFAULT_BACKGROUND_IMAGE_OPACITY,
         backgroundImageUri = null,
         bottomMarginDp = KeyboardPrefs.DEFAULT_BOTTOM_MARGIN_DP,
+        clipboardAutoSave = KeyboardPrefs.DEFAULT_CLIPBOARD_AUTO_SAVE,
         characterSizeSp = KeyboardPrefs.DEFAULT_CHARACTER_SIZE_SP,
+        clipboardRetentionDays = KeyboardPrefs.DEFAULT_CLIPBOARD_RETENTION_DAYS,
         cornerRadiusDp = KeyboardPrefs.DEFAULT_CORNER_RADIUS_DP,
         horizontalMarginDp = KeyboardPrefs.DEFAULT_HORIZONTAL_MARGIN_DP,
         keyGapDp = KeyboardPrefs.DEFAULT_KEY_GAP_DP,
@@ -111,6 +115,7 @@ class RetuiKeyboardService : InputMethodService() {
     private val glideKeyHits = mutableListOf<GlideKeyHit>()
     private var glideTrailView: GlideTrailView? = null
     private var emojiMode = false
+    private var clipboardMode = false
     private var emojiCategoryIndex = 0
 
     override fun onCreate() {
@@ -142,6 +147,7 @@ class RetuiKeyboardService : InputMethodService() {
         applyEditorInfo(info)
         val nextLayout = KeyboardPrefs.readLayout(prefs)
         layout = nextLayout
+        captureClipboardIfEnabled()
         val shiftedForEmptyInput = armShiftForEmptyInputIfNeeded()
         if (shiftedForEmptyInput || keyboardViewSignature(nextLayout) != lastKeyboardViewSignature) {
             setInputView(buildKeyboardView())
@@ -247,7 +253,11 @@ class RetuiKeyboardService : InputMethodService() {
             root.addView(suggestionStripView(), fixedRowParams(35))
         }
         val main = normalKeyboardBody(landscape = false)
-        val body = if (emojiMode) emojiBodyLayer(main, categoryInHeader) else glideLayer(main)
+        val body = when {
+            emojiMode -> emojiBodyLayer(main, categoryInHeader)
+            clipboardMode -> clipboardBodyLayer(main)
+            else -> glideLayer(main)
+        }
         root.addView(body, LinearLayout.LayoutParams(-1, -2))
         return root
     }
@@ -261,7 +271,11 @@ class RetuiKeyboardService : InputMethodService() {
             root.addView(suggestionStripView(), fixedRowParams(28))
         }
         val main = normalKeyboardBody(landscape = true)
-        val body = if (emojiMode) emojiBodyLayer(main, categoryInHeader) else main
+        val body = when {
+            emojiMode -> emojiBodyLayer(main, categoryInHeader)
+            clipboardMode -> clipboardBodyLayer(main)
+            else -> main
+        }
         root.addView(body, LinearLayout.LayoutParams(-1, -2))
         return root
     }
@@ -297,6 +311,22 @@ class RetuiKeyboardService : InputMethodService() {
         return body
     }
 
+    private fun clipboardBodyLayer(normalBody: LinearLayout): View {
+        val frame = GlideLayerFrame(this)
+        normalBody.visibility = View.INVISIBLE
+        frame.addView(normalBody, FrameLayout.LayoutParams(-1, -2))
+        frame.addView(clipboardBodyOverlay(), FrameLayout.LayoutParams(-1, -1))
+        return frame
+    }
+
+    private fun clipboardBodyOverlay(): LinearLayout {
+        val body = keyboardBody()
+        body.background = panel(theme.panelBg, theme.border, 6, notch = true)
+        body.addView(clipboardListScroll(), weightedRowParams())
+        body.addView(clipboardControlRow(), rowParams(emojiControlHeightDp()))
+        return body
+    }
+
     private fun keyboardBody(): LinearLayout {
         val body = LinearLayout(this)
         body.orientation = LinearLayout.VERTICAL
@@ -315,18 +345,22 @@ class RetuiKeyboardService : InputMethodService() {
             },
             LinearLayout.LayoutParams(0, -1, 1.2f)
         )
-        EmojiData.CATEGORIES.forEachIndexed { index, category ->
+        repeat(emojiCategoryCount()) { index ->
             row.addView(
-                emojiActionCell(category.first, active = index == emojiCategoryIndex, contentDescription = "Emoji category ${category.first}") {
+                emojiActionCell(emojiCategoryLabel(index), active = index == emojiCategoryIndex, contentDescription = "Emoji category ${emojiCategoryLabel(index)}") {
                     selectEmojiCategory(index)
                 },
                 LinearLayout.LayoutParams(0, -1, 1f)
             )
         }
         row.addView(
-            emojiActionCell(ICON_BACKSPACE, active = false, contentDescription = "Backspace") {
-                backspace()
-            },
+            emojiActionCell(
+                ICON_BACKSPACE,
+                active = false,
+                contentDescription = "Backspace",
+                action = { backspace() },
+                repeatAction = { backspace() }
+            ),
             LinearLayout.LayoutParams(0, -1, 1.1f)
         )
         return row
@@ -387,9 +421,13 @@ class RetuiKeyboardService : InputMethodService() {
             LinearLayout.LayoutParams(0, -1, 3.6f)
         )
         row.addView(
-            emojiActionCell(ICON_BACKSPACE, active = false, contentDescription = "Backspace") {
-                backspace()
-            },
+            emojiActionCell(
+                ICON_BACKSPACE,
+                active = false,
+                contentDescription = "Backspace",
+                action = { backspace() },
+                repeatAction = { backspace() }
+            ),
             LinearLayout.LayoutParams(0, -1, 1.05f)
         )
         row.addView(
@@ -408,15 +446,118 @@ class RetuiKeyboardService : InputMethodService() {
         cell.setTextColor(theme.keyText)
         cell.background = keyVisualInset(panel(theme.keyBg, theme.border, 5))
         bindTapKey(cell) {
+            EmojiRecentsStore.record(prefs, emoji)
             commitEmoji(emoji)
         }
         return cell
+    }
+
+    private fun clipboardListScroll(): ScrollView {
+        val scroll = ScrollView(this)
+        scroll.isFillViewport = false
+        scroll.isVerticalScrollBarEnabled = true
+        scroll.overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+        scroll.background = ColorDrawable(Color.TRANSPARENT)
+
+        val list = LinearLayout(this)
+        list.orientation = LinearLayout.VERTICAL
+        list.setPadding(dp(2), dp(2), dp(2), dp(2))
+
+        val items = LocalClipboardStore.items(prefs, layout.clipboardRetentionDays)
+        if (items.isEmpty()) {
+            list.addView(clipboardEmptyCell(), LinearLayout.LayoutParams(-1, dp(clipboardRowHeightDp())))
+        } else {
+            items.forEach { item ->
+                list.addView(clipboardItemCell(item), LinearLayout.LayoutParams(-1, dp(clipboardRowHeightDp())))
+            }
+        }
+
+        scroll.addView(list, FrameLayout.LayoutParams(-1, -2))
+        return scroll
+    }
+
+    private fun clipboardControlRow(): LinearLayout {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER
+        row.setPadding(dp(layout.keyGapDp), dp(1), dp(layout.keyGapDp), dp(1))
+        row.addView(
+            emojiActionCell("ABC", active = false, contentDescription = "Return to letters") {
+                closeClipboardMode()
+            },
+            LinearLayout.LayoutParams(0, -1, 1.15f)
+        )
+        row.addView(
+            emojiActionCell("+", active = false, contentDescription = "Save clipboard") {
+                saveCurrentClipboardText()
+            },
+            LinearLayout.LayoutParams(0, -1, 0.8f)
+        )
+        row.addView(
+            emojiActionCell(ICON_CLIPBOARD, active = true, contentDescription = "Clipboard") {},
+            LinearLayout.LayoutParams(0, -1, 0.9f)
+        )
+        row.addView(
+            emojiActionCell("CLR", active = false, contentDescription = "Clear clipboard") {
+                LocalClipboardStore.clear(prefs)
+                setInputView(buildKeyboardView())
+            },
+            LinearLayout.LayoutParams(0, -1, 1f)
+        )
+        row.addView(
+            emojiActionCell("SPACE", active = false, contentDescription = "Space") {
+                commit(" ")
+            },
+            LinearLayout.LayoutParams(0, -1, 2.8f)
+        )
+        row.addView(
+            emojiActionCell(
+                ICON_BACKSPACE,
+                active = false,
+                contentDescription = "Backspace",
+                action = { backspace() },
+                repeatAction = { backspace() }
+            ),
+            LinearLayout.LayoutParams(0, -1, 1f)
+        )
+        return row
+    }
+
+    private fun clipboardItemCell(item: LocalClipboardItem): TextView {
+        val cell = keyLabel(clipboardPreview(item.text), Gravity.CENTER_VERTICAL or Gravity.START, theme.fontSizeSp.coerceIn(11, 18))
+        cell.contentDescription = "Paste clipboard item"
+        cell.setTextColor(theme.keyText)
+        cell.maxLines = 2
+        cell.ellipsize = TextUtils.TruncateAt.END
+        cell.setPadding(dp(10), 0, dp(10), 0)
+        cell.background = keyVisualInset(panel(theme.keyBg, theme.border, 5))
+        bindTapKey(cell) {
+            pasteClipboardItem(item.text)
+        }
+        cell.setOnLongClickListener {
+            LocalClipboardStore.remove(prefs, item.text)
+            setInputView(buildKeyboardView())
+            true
+        }
+        return cell
+    }
+
+    private fun clipboardEmptyCell(): TextView {
+        val cell = keyLabel("EMPTY", Gravity.CENTER, theme.fontSizeSp.coerceIn(11, 18))
+        cell.setTextColor(theme.keyText)
+        cell.background = keyVisualInset(panel(theme.keyBg, theme.border, 5))
+        return cell
+    }
+
+    private fun clipboardPreview(text: String): String {
+        return text.replace('\n', ' ').replace('\r', ' ').trim().ifBlank { " " }
     }
 
     private fun emojiActionCell(
         label: String,
         active: Boolean,
         contentDescription: String,
+        repeatAction: (() -> Unit)? = null,
         action: () -> Unit
     ): TextView {
         val cell = keyLabel(label, Gravity.CENTER, if (label.length <= 2) max(14, theme.fontSizeSp + 2) else keyTextSize(label))
@@ -424,14 +565,26 @@ class RetuiKeyboardService : InputMethodService() {
         cell.contentDescription = contentDescription
         cell.setTextColor(if (active) theme.specialKeyText else theme.keyText)
         cell.background = if (active) specialKeyBackground(active = true) else keyBackground(active = false)
-        bindImmediateKey(cell, action = action, dismissEmojiOnDown = false)
+        bindImmediateKey(cell, action = action, repeatAction = repeatAction, dismissEmojiOnDown = false)
         return cell
     }
 
     private fun activeEmojiList(): List<String> {
-        val safeIndex = emojiCategoryIndex.coerceIn(0, EmojiData.CATEGORIES.lastIndex)
+        val safeIndex = emojiCategoryIndex.coerceIn(0, emojiCategoryCount() - 1)
         if (safeIndex != emojiCategoryIndex) emojiCategoryIndex = safeIndex
-        return EmojiData.CATEGORIES[safeIndex].second
+        return if (safeIndex == 0) {
+            EmojiRecentsStore.items(prefs)
+        } else {
+            EmojiData.CATEGORIES[safeIndex - 1].second
+        }
+    }
+
+    private fun emojiCategoryCount(): Int {
+        return EmojiData.CATEGORIES.size + 1
+    }
+
+    private fun emojiCategoryLabel(index: Int): String {
+        return if (index == 0) ICON_RECENTS else EmojiData.CATEGORIES[index - 1].first
     }
 
     private fun emojiColumnCount(): Int {
@@ -450,6 +603,10 @@ class RetuiKeyboardService : InputMethodService() {
         return if (isLandscape()) 30 else 42
     }
 
+    private fun clipboardRowHeightDp(): Int {
+        return if (isLandscape()) 38 else 46
+    }
+
     private fun glideLayer(main: LinearLayout): View {
         if (!layout.glideTyping || isLandscape() || symbols || usesNumberPad()) return main
         val frame = GlideLayerFrame(this)
@@ -463,14 +620,31 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun suggestionStripView(): LinearLayout {
-        val strip = LinearLayout(this)
-        strip.orientation = LinearLayout.HORIZONTAL
-        strip.gravity = Gravity.CENTER_VERTICAL
-        strip.setPadding(dp(layout.keyGapDp + 2), dp(layout.keyGapDp), dp(layout.keyGapDp + 2), dp(layout.keyGapDp))
-        strip.background = panel(theme.panelBg, theme.border, 6, notch = true)
-        suggestionStrip = strip
-        populateSuggestionStrip(strip)
-        return strip
+        val outer = LinearLayout(this)
+        outer.orientation = LinearLayout.HORIZONTAL
+        outer.gravity = Gravity.CENTER_VERTICAL
+        outer.setPadding(dp(layout.keyGapDp + 2), dp(layout.keyGapDp), dp(layout.keyGapDp + 2), dp(layout.keyGapDp))
+        outer.background = panel(theme.panelBg, theme.border, 6, notch = true)
+
+        val chips = LinearLayout(this)
+        chips.orientation = LinearLayout.HORIZONTAL
+        chips.gravity = Gravity.CENTER_VERTICAL
+        suggestionStrip = chips
+        outer.addView(chips, LinearLayout.LayoutParams(0, -1, 1f))
+        outer.addView(clipboardStripButton(), LinearLayout.LayoutParams(dp(if (isLandscape()) 34 else 40), -1))
+        populateSuggestionStrip(chips)
+        return outer
+    }
+
+    private fun clipboardStripButton(): TextView {
+        val button = keyLabel(ICON_CLIPBOARD, Gravity.CENTER, max(14, theme.fontSizeSp + 2))
+        button.contentDescription = "Clipboard"
+        button.setTextColor(if (clipboardMode) theme.specialKeyText else theme.keyText)
+        button.background = keyVisualInset(if (clipboardMode) specialKeyBackground(active = true) else panel(theme.keyBg, theme.border, 5))
+        bindImmediateKey(button, action = {
+            if (clipboardMode) closeClipboardMode() else openClipboardMode()
+        }, dismissEmojiOnDown = false)
+        return button
     }
 
     private fun populateSuggestionStrip(strip: LinearLayout) {
@@ -1243,6 +1417,7 @@ class RetuiKeyboardService : InputMethodService() {
                     touched.isPressed = true
                     pressFeedback(touched)
                     if (dismissEmojiOnDown && emojiMode) closeEmojiMode()
+                    if (dismissEmojiOnDown && clipboardMode) closeClipboardMode()
                     action()
                     repeatAction?.let { startRepeat(it) }
                     true
@@ -1300,6 +1475,7 @@ class RetuiKeyboardService : InputMethodService() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     if (emojiMode) closeEmojiMode()
+                    if (clipboardMode) closeClipboardMode()
                     downRawX = event.rawX
                     downRawY = event.rawY
                     activeKeyCode = null
@@ -2112,6 +2288,7 @@ class RetuiKeyboardService : InputMethodService() {
             offersSuggestions = shouldOfferSuggestions(nextLayout, info),
             symbols = symbols,
             emojiMode = emojiMode,
+            clipboardMode = clipboardMode,
             emojiCategoryIndex = emojiCategoryIndex
         )
     }
@@ -2307,7 +2484,8 @@ class RetuiKeyboardService : InputMethodService() {
         capsLocked = false
         clearLatchedModifiers()
         emojiMode = true
-        emojiCategoryIndex = emojiCategoryIndex.coerceIn(0, EmojiData.CATEGORIES.lastIndex)
+        clipboardMode = false
+        emojiCategoryIndex = emojiCategoryIndex.coerceIn(0, emojiCategoryCount() - 1)
         setInputView(buildKeyboardView())
     }
 
@@ -2319,9 +2497,56 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun selectEmojiCategory(index: Int) {
-        val safeIndex = index.coerceIn(0, EmojiData.CATEGORIES.lastIndex)
+        val safeIndex = index.coerceIn(0, emojiCategoryCount() - 1)
         if (safeIndex == emojiCategoryIndex) return
         emojiCategoryIndex = safeIndex
+        setInputView(buildKeyboardView())
+    }
+
+    private fun openClipboardMode() {
+        stopRepeat()
+        cancelSuggestionRefresh()
+        symbols = false
+        shifted = false
+        capsLocked = false
+        clearLatchedModifiers()
+        emojiMode = false
+        clipboardMode = true
+        captureClipboardIfEnabled()
+        setInputView(buildKeyboardView())
+    }
+
+    private fun closeClipboardMode() {
+        if (!clipboardMode) return
+        clipboardMode = false
+        setInputView(buildKeyboardView())
+        refreshSuggestionStripSoon()
+    }
+
+    private fun saveCurrentClipboardText() {
+        val text = currentClipboardText() ?: return
+        LocalClipboardStore.add(prefs, text, layout.clipboardRetentionDays)
+        setInputView(buildKeyboardView())
+    }
+
+    private fun captureClipboardIfEnabled() {
+        if (!layout.clipboardAutoSave) return
+        val text = currentClipboardText() ?: return
+        LocalClipboardStore.add(prefs, text, layout.clipboardRetentionDays)
+    }
+
+    private fun currentClipboardText(): String? {
+        val manager = getSystemService(ClipboardManager::class.java) ?: return null
+        val clip = manager.primaryClip ?: return null
+        if (clip.itemCount <= 0) return null
+        return clip.getItemAt(0).coerceToText(this)?.toString()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun pasteClipboardItem(text: String) {
+        currentInputConnection?.commitText(text, 1)
+        LocalClipboardStore.markUsed(prefs, text, layout.clipboardRetentionDays)
+        localWordBeforeCursor = ""
+        pendingAddWord = null
         setInputView(buildKeyboardView())
     }
 
@@ -2837,7 +3062,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun refreshSuggestionStrip() {
-        if (emojiMode) return
+        if (emojiMode || clipboardMode) return
         val offersSuggestions = shouldOfferSuggestions()
         if (offersSuggestions != (suggestionStrip != null)) {
             setInputView(buildKeyboardView())
@@ -2937,6 +3162,7 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun resetTransientLayoutState() {
         emojiMode = false
+        clipboardMode = false
         emojiCategoryIndex = 0
         symbols = false
         shifted = false
@@ -3547,6 +3773,7 @@ class RetuiKeyboardService : InputMethodService() {
         val offersSuggestions: Boolean,
         val symbols: Boolean,
         val emojiMode: Boolean,
+        val clipboardMode: Boolean,
         val emojiCategoryIndex: Int
     )
 
@@ -3883,6 +4110,7 @@ class RetuiKeyboardService : InputMethodService() {
         private const val SENTENCE_CONTEXT_CHARS = 128
         private const val NAV_MODE_GESTURAL = 2
         private const val ICON_BACKSPACE = "⌫"
+        private const val ICON_CLIPBOARD = "⧉"
         private const val ICON_CONTEXT = "⌘"
         private const val ICON_DONE = "✓"
         private const val ICON_DPAD = "↕↔"
@@ -3894,6 +4122,7 @@ class RetuiKeyboardService : InputMethodService() {
         private const val ICON_HIDE = "⌄"
         private const val ICON_LEFT = "←"
         private const val ICON_RIGHT = "→"
+        private const val ICON_RECENTS = "◷"
         private const val ICON_SEARCH = "⌕"
         private const val ICON_SEND = "➤"
         private const val ICON_SETTINGS = "⚙"

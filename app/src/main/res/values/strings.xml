@@ -28,6 +28,10 @@
     <string name="setting_sound_on_keypress_summary">Plays the system key click sound.</string>
     <string name="setting_local_suggestions">Local suggestions</string>
     <string name="setting_local_suggestions_summary">Shows offline word suggestions from this device only.</string>
+    <string name="setting_clipboard_auto_save">Auto-save clipboard</string>
+    <string name="setting_clipboard_auto_save_summary">Saves copied text locally while the keyboard is active.</string>
+    <string name="setting_clipboard_retention_days">Clipboard clear after</string>
+    <string name="setting_clipboard_retention_suffix">days</string>
     <string name="setting_delete_whole_word">Delete whole word</string>
     <string name="setting_delete_whole_word_summary">Backspace removes the word before the cursor when possible.</string>
     <string name="setting_double_space_period">Smart sentence assist</string>
@@ -51,8 +55,10 @@
     <string name="setting_pick_background">Pick background image</string>
     <string name="setting_clear_background">Clear background image</string>
     <string name="setting_sync_launcher_colors">Sync with Re:TUI launcher</string>
-    <string name="setting_save_keyboard_colors">Save keyboard colors</string>
-    <string name="setting_clear_keyboard_colors">Clear keyboard color override</string>
+    <string name="setting_cyberdeck_mode">Cyberdeck mode</string>
+    <string name="setting_cyberdeck_mode_summary">Uses hard-edged cyberdeck panels without launcher sync.</string>
+    <string name="setting_save_keyboard_colors">Save keyboard theme</string>
+    <string name="setting_clear_keyboard_colors">Clear keyboard theme override</string>
     <string name="setting_input_methods">Input method settings</string>
     <string name="setting_preview_hint">$ preview</string>
     <string name="setting_reset_layout">Reset layout</string>
