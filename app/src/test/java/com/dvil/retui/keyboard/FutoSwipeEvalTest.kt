@@ -1,6 +1,5 @@
 package com.dvil.retui.keyboard
 
-import android.content.SharedPreferences
 import org.json.JSONObject
 import org.junit.Test
 import java.io.File
@@ -14,7 +13,7 @@ class FutoSwipeEvalTest {
         val file = explicitPath?.let(::File)?.takeIf { it.exists() } ?: return
         installLatinImeForJvm()
 
-        val prefs = FakePrefs()
+        val prefs = FakeSharedPreferences()
         val centers = futoQwertyCenters()
         var rows = 0
         var knownRows = 0
@@ -218,17 +217,4 @@ class FutoSwipeEvalTest {
             .joinToString { "${it.key}:${it.value}" }
     }
 
-    private class FakePrefs : SharedPreferences {
-        override fun getString(key: String?, defValue: String?): String? = defValue
-        override fun getStringSet(key: String?, defValues: MutableSet<String>?): MutableSet<String>? = defValues
-        override fun getInt(key: String?, defValue: Int): Int = defValue
-        override fun getLong(key: String?, defValue: Long): Long = defValue
-        override fun getFloat(key: String?, defValue: Float): Float = defValue
-        override fun getBoolean(key: String?, defValue: Boolean): Boolean = defValue
-        override fun contains(key: String?): Boolean = false
-        override fun getAll(): MutableMap<String, *> = mutableMapOf<String, Any>()
-        override fun edit(): SharedPreferences.Editor = throw UnsupportedOperationException()
-        override fun registerOnSharedPreferenceChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener?) = Unit
-        override fun unregisterOnSharedPreferenceChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener?) = Unit
-    }
 }

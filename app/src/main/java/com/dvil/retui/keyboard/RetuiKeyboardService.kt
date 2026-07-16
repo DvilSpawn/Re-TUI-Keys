@@ -800,7 +800,7 @@ class RetuiKeyboardService : InputMethodService() {
             ),
             keyHeight
         )
-        val third = mutableListOf(KeySpec(shiftLabel(), if (landscape) 1.15f else 1.35f, Special.SHIFT))
+        val third = mutableListOf(KeySpec(ICON_SHIFT, if (landscape) 1.15f else 1.35f, Special.SHIFT))
         third.addAll(textRow("zxcvbnm"))
         third.add(KeySpec(ICON_BACKSPACE, if (landscape) 1.15f else 1.35f, Special.BACKSPACE))
         addKeyRow(parent, third, keyHeight)
@@ -844,7 +844,7 @@ class RetuiKeyboardService : InputMethodService() {
         )
         addSplitKeyRow(
             parent = parent,
-            left = mutableListOf(KeySpec(shiftLabel(), 1.15f, Special.SHIFT)).apply {
+            left = mutableListOf(KeySpec(ICON_SHIFT, 1.15f, Special.SHIFT)).apply {
                 addAll(textRow("zxcv"))
             },
             center = if (layout.showNumberRow) emptyList() else splitSpecialRow(2),
@@ -934,7 +934,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun addPortraitTextRows(parent: LinearLayout) {
         addKeyRow(parent, textRow("qwertyuiop"), 42)
         addKeyRow(parent, textRow("asdfghjkl", leadingSpacer = 0.55f, trailingSpacer = 0.55f), 42)
-        val third = mutableListOf(KeySpec(shiftLabel(), 1.35f, Special.SHIFT))
+        val third = mutableListOf(KeySpec(ICON_SHIFT, 1.35f, Special.SHIFT))
         third.addAll(textRow("zxcvbnm"))
         third.add(KeySpec(ICON_BACKSPACE, 1.35f, Special.BACKSPACE))
         addKeyRow(parent, third, 42)
@@ -2156,10 +2156,6 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun currentImeAction(): Int {
         return (currentInfo?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION
-    }
-
-    private fun shiftLabel(): String {
-        return ICON_SHIFT
     }
 
     private fun pressFeedback(view: View) {

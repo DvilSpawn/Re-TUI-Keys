@@ -205,7 +205,7 @@ object LocalDictionary {
         val safeLimit = limit.coerceIn(1, 8)
         val prefix = normalizeSearch(rawPrefix)
         if (prefix.isBlank()) return emptyList()
-        val searchPrefix = searchKey(prefix)
+        val searchPrefix = dictionarySearchKey(prefix)
         val userWords = readEntries(prefs)
         val ranked = LinkedHashMap<String, RankedCandidate>()
 
@@ -249,7 +249,7 @@ object LocalDictionary {
     fun suggestCurrentWordAlternatives(prefs: SharedPreferences, rawWord: String, limit: Int): List<String> {
         val safeLimit = limit.coerceIn(1, 5)
         val word = normalizeWord(rawWord) ?: return emptyList()
-        val searchWord = searchKey(word)
+        val searchWord = dictionarySearchKey(word)
         if (searchWord.isBlank()) return emptyList()
 
         val userWords = readEntries(prefs)
@@ -260,7 +260,7 @@ object LocalDictionary {
 
         fun offer(candidate: String, score: Int) {
             val normalized = normalizeWord(candidate) ?: return
-            val searchCandidate = searchKey(normalized)
+            val searchCandidate = dictionarySearchKey(normalized)
             if (abs(searchCandidate.length - searchWord.length) > 1) return
             val distance = editDistanceAtMost(searchWord, searchCandidate, 1)
             if (distance !in 0..1) return
@@ -322,7 +322,7 @@ object LocalDictionary {
 
         fun offer(word: String, baseScore: Int) {
             val normalized = normalizeWord(word) ?: return
-            val key = searchKey(normalized)
+            val key = dictionarySearchKey(normalized)
             val score = glideScore(trace, key, baseScore)
             if (score <= 0) return
             val current = ranked[normalized]
@@ -365,7 +365,7 @@ object LocalDictionary {
 
         fun offer(word: String, baseScore: Int) {
             val normalized = normalizeWord(word) ?: return
-            val key = searchKey(normalized)
+            val key = dictionarySearchKey(normalized)
             val languageScore = offlineGlideLanguageModel.score(context, key)
             if (
                 startChar != null &&
@@ -588,7 +588,7 @@ object LocalDictionary {
 
     private fun matchesPrefix(word: String, prefix: String, searchPrefix: String): Boolean {
         if (prefix.isBlank()) return true
-        return word.startsWith(prefix) || searchKey(word).startsWith(searchPrefix)
+        return word.startsWith(prefix) || dictionarySearchKey(word).startsWith(searchPrefix)
     }
 
     private fun matchesPrefix(entry: StaticWordEntry, prefix: String, searchPrefix: String): Boolean {
@@ -609,7 +609,7 @@ object LocalDictionary {
         val base = if (searchPrefix.length < 3) 45_000 else 92_000
         val matchBoost = if (entry.word.startsWith(prefix)) 18_000 else 11_000
         val frequencyBoost = (entry.frequency * 1_800).coerceAtMost(42_000)
-        val lengthPenalty = ((searchKey(entry.word).length - searchPrefix.length).coerceAtLeast(0) * 500).coerceAtMost(8_000)
+        val lengthPenalty = ((dictionarySearchKey(entry.word).length - searchPrefix.length).coerceAtLeast(0) * 500).coerceAtMost(8_000)
         return base + matchBoost + frequencyBoost - lengthPenalty
     }
 
@@ -936,7 +936,7 @@ object LocalDictionary {
         userWords
             .filter { it.frequency >= 2 }
             .forEach { entry ->
-                val compact = searchKey(entry.word)
+                val compact = dictionarySearchKey(entry.word)
                 if (kotlin.math.abs(compact.length - searchPrefix.length) <= maxDistance) {
                     val distance = editDistanceAtMost(searchPrefix, compact, maxDistance)
                     if (distance in 0..maxDistance) {
@@ -968,10 +968,6 @@ object LocalDictionary {
             current = swap
         }
         return previous[right.length]
-    }
-
-    private fun searchKey(word: String): String {
-        return dictionarySearchKey(word)
     }
 
     private fun buildStaticIndex(entries: List<StaticWordEntry>): StaticIndex {
