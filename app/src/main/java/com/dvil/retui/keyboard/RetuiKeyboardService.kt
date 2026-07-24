@@ -21,6 +21,7 @@ import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.InsetDrawable
+import android.graphics.drawable.StateListDrawable
 import android.inputmethodservice.InputMethodService
 import android.media.AudioManager
 import android.net.Uri
@@ -1287,7 +1288,8 @@ class RetuiKeyboardService : InputMethodService() {
                     else -> null
                 },
                 active = isSpecialKeyActive(key.special),
-                specialStyle = key.specialStyle
+                specialStyle = key.specialStyle,
+                previewLabel = tapPreviewLabel(key)
             )
         }
 
@@ -1394,12 +1396,13 @@ class RetuiKeyboardService : InputMethodService() {
         action: () -> Unit,
         repeatAction: (() -> Unit)? = null,
         active: Boolean = false,
-        specialStyle: Boolean = false
+        specialStyle: Boolean = false,
+        previewLabel: String? = null
     ): TextView {
         val view = keyLabel(label, Gravity.CENTER, keyTextSize(label))
         view.setTextColor(if (specialStyle) theme.specialKeyText else theme.keyText)
         view.background = if (specialStyle) specialKeyBackground(active) else keyBackground(active)
-        bindImmediateKey(view, action, repeatAction)
+        bindImmediateKey(view, action, repeatAction, previewLabel = previewLabel)
         return view
     }
 
@@ -1407,13 +1410,21 @@ class RetuiKeyboardService : InputMethodService() {
         view: View,
         action: () -> Unit,
         repeatAction: (() -> Unit)? = null,
-        dismissEmojiOnDown: Boolean = true
+        dismissEmojiOnDown: Boolean = true,
+        previewLabel: String? = null
     ) {
         view.isClickable = true
         view.isFocusable = false
+        var popup: PopupWindow? = null
+        fun clearPopup() {
+            popup?.dismiss()
+            popup = null
+        }
         view.setOnTouchListener { touched, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    clearPopup()
+                    popup = showKeyPreview(touched, previewLabel)
                     touched.isPressed = true
                     pressFeedback(touched)
                     if (dismissEmojiOnDown && emojiMode) closeEmojiMode()
@@ -1424,6 +1435,7 @@ class RetuiKeyboardService : InputMethodService() {
                 }
                 MotionEvent.ACTION_UP,
                 MotionEvent.ACTION_CANCEL -> {
+                    clearPopup()
                     touched.isPressed = false
                     stopRepeat()
                     true
@@ -1589,6 +1601,7 @@ class RetuiKeyboardService : InputMethodService() {
                     glidePoints.clear()
                     clearGlideTrail()
                     clearPopup()
+                    popup = showKeyPreview(touched, tapPreviewLabel(key))
                     downRawX = event.rawX
                     downRawY = event.rawY
                     touched.isPressed = true
@@ -1600,6 +1613,7 @@ class RetuiKeyboardService : InputMethodService() {
                     longPressRunnable = Runnable {
                         longPressHandled = true
                         if (primaryCommitted) rollbackPrimaryCommit(key)
+                        clearPopup()
                         if (key.accentVariants.isNotEmpty()) {
                             accentIndex = 0
                             accentPopup = showAccentVariantPicker(view, key.accentVariants)
@@ -1622,6 +1636,7 @@ class RetuiKeyboardService : InputMethodService() {
                         if (!glideTracking && movedPastGlideThreshold(event.rawX, event.rawY, downRawX, downRawY)) {
                             longPressRunnable?.let { repeatHandler.removeCallbacks(it) }
                             longPressRunnable = null
+                            clearPopup()
                             glideTracking = true
                             touched.isPressed = false
                             appendGlideHit(glideTrace, downRawX, downRawY)
@@ -2010,17 +2025,28 @@ class RetuiKeyboardService : InputMethodService() {
         currentInputConnection?.deleteSurroundingText(text.length, 0)
     }
 
+    private fun tapPreviewLabel(key: KeySpec): String? {
+        val text = key.text ?: return null
+        return text.takeIf { it.length == 1 && it.isNotBlank() }
+    }
+
     private fun showLongPressPreview(anchor: View, key: KeySpec): PopupWindow? {
         val label = key.longLabel ?: key.longText ?: return null
-        val preview = keyLabel(label, Gravity.CENTER, max(14, keyTextSize(label) + 4))
-        preview.setTextColor(theme.keyText)
-        preview.background = panel(brightenColor(theme.keyBg, 1.22f, 30), theme.border, 4)
-        preview.elevation = dpFloat(8f)
-        preview.contentDescription = when (key.longSpecial) {
+        val description = when (key.longSpecial) {
             Special.SETTINGS -> "Open settings"
             Special.SHIFT_ENTER -> "Send Shift+Enter"
             else -> "Insert $label"
         }
+        return showKeyPreview(anchor, label, description)
+    }
+
+    private fun showKeyPreview(anchor: View, label: String?, description: String? = null): PopupWindow? {
+        if (label.isNullOrBlank()) return null
+        val preview = keyLabel(label, Gravity.CENTER, max(14, keyTextSize(label) + 4))
+        preview.setTextColor(theme.keyText)
+        preview.background = panel(brightenColor(theme.keyBg, 1.22f, 30), theme.border, 4)
+        preview.elevation = dpFloat(8f)
+        preview.contentDescription = description ?: "Key preview $label"
 
         val width = dp(48)
         val height = dp(44)
@@ -2391,12 +2417,21 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun keyBackground(active: Boolean): Drawable {
-        return keyVisualInset(panel(keyFillColor(active), theme.border, 5))
+        return keyVisualInset(keyStateBackground(theme.keyBg, theme.border, active))
     }
 
     private fun specialKeyBackground(active: Boolean): Drawable {
         val fill = specialKeyFillColor(active)
-        return keyVisualInset(panel(fill, theme.border, 5))
+        return keyVisualInset(keyStateBackground(fill, theme.border, active))
+    }
+
+    private fun keyStateBackground(fill: Int, stroke: Int, active: Boolean): Drawable {
+        val normalFill = if (active) brightenColor(fill, 1.16f, 36) else fill
+        val pressedFill = brightenColor(normalFill, 1.22f, 42)
+        return StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_pressed), panel(pressedFill, stroke, 5))
+            addState(intArrayOf(), panel(normalFill, stroke, 5))
+        }
     }
 
     private fun keyVisualInset(drawable: Drawable): Drawable {
