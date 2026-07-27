@@ -1143,7 +1143,9 @@ class RetuiKeyboardService : InputMethodService() {
             val index = chars.indexOf(ch)
             val label = shiftedChar(ch) ?: ch.toString()
             val longLabel = longLabels?.getOrNull(index)?.toString()
-            val accentVariants = accentVariantsFor(ch)
+            val accentVariants = accentVariantsFor(ch).let { variants ->
+                if (variants.isEmpty()) variants else variants + listOfNotNull(longLabel)
+            }
             out.add(
                 KeySpec(
                     label = label,
