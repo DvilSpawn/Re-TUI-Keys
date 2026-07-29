@@ -45,6 +45,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
+import androidx.core.widget.doAfterTextChanged
 import org.json.JSONObject
 import java.io.File
 import java.io.OutputStreamWriter
@@ -104,6 +105,13 @@ class KeyboardSettingsActivity : ComponentActivity() {
     private fun configureWindow() {
         window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         window.decorView.setBackgroundColor(Color.TRANSPARENT)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
         applyLegacySystemBarColors(Color.TRANSPARENT)
         window.setSoftInputMode(visibleResizeSoftInputMode())
     }
@@ -855,6 +863,13 @@ class KeyboardSettingsActivity : ComponentActivity() {
                 render(parsed, syncField = true)
                 hexInput.clearFocus()
                 previewInput.requestFocus()
+            }
+        }
+
+        hexInput.doAfterTextChanged { text ->
+            parseColorValue(text?.toString())?.let { color ->
+                render(color, syncField = false)
+                sendPreviewTheme(themeDraft)
             }
         }
 
@@ -1835,33 +1850,33 @@ class KeyboardSettingsActivity : ComponentActivity() {
         previewThemeRunnable = null
     }
 
-    private fun sendPreviewTheme() {
+    private fun sendPreviewTheme(previewTheme: SettingsTheme = theme) {
         if (!::previewInput.isInitialized) return
         val data = Bundle().apply {
-            putInt("theme_bg", theme.bg)
-            putInt("theme_text", theme.text)
-            putInt("terminal_border_color", theme.border)
-            putInt("terminal_window_background_color", theme.panelBg)
-            putInt("terminal_header_background_color", theme.headerBg)
-            putInt("terminal_header_border_color", theme.headerTabBorder)
-            putInt("module_text_color", theme.headerText)
-            putInt("module_button_background_color", theme.inputBg)
-            putInt("module_button_text_color", theme.inputText)
-            putInt("keyboard_special_key_bg", theme.specialKeyBg)
-            putInt("keyboard_special_key_text", theme.specialKeyText)
-            putInt("output_background_color", theme.outputBg)
-            putInt("output_border_color", theme.outputBorder)
-            putBoolean("enable_dashed_border", theme.dashedBorders)
-            putInt("dashed_border_dash_length", theme.dashLengthDp)
-            putInt("dashed_border_gap_length", theme.dashGapDp)
-            putString("dashed_border_stroke_width", theme.dashedStrokeWidthDp.toString())
-            putInt("module_corner_radius", theme.moduleCornerRadiusDp)
-            putInt("output_corner_radius", theme.outputCornerRadiusDp)
-            putInt("header_corner_radius", theme.headerCornerRadiusDp)
-            putInt("module_body_text_size", theme.moduleBodyTextSizeSp)
-            putInt("output_header_text_size", theme.outputHeaderTextSizeSp)
-            putBoolean("enable_cyberdeck_mode", theme.cyberdeckMode)
-            putBoolean("enable_crt_filter", theme.crtFilter)
+            putInt("theme_bg", previewTheme.bg)
+            putInt("theme_text", previewTheme.text)
+            putInt("terminal_border_color", previewTheme.border)
+            putInt("terminal_window_background_color", previewTheme.panelBg)
+            putInt("terminal_header_background_color", previewTheme.headerBg)
+            putInt("terminal_header_border_color", previewTheme.headerTabBorder)
+            putInt("module_text_color", previewTheme.headerText)
+            putInt("module_button_background_color", previewTheme.inputBg)
+            putInt("module_button_text_color", previewTheme.inputText)
+            putInt("keyboard_special_key_bg", previewTheme.specialKeyBg)
+            putInt("keyboard_special_key_text", previewTheme.specialKeyText)
+            putInt("output_background_color", previewTheme.outputBg)
+            putInt("output_border_color", previewTheme.outputBorder)
+            putBoolean("enable_dashed_border", previewTheme.dashedBorders)
+            putInt("dashed_border_dash_length", previewTheme.dashLengthDp)
+            putInt("dashed_border_gap_length", previewTheme.dashGapDp)
+            putString("dashed_border_stroke_width", previewTheme.dashedStrokeWidthDp.toString())
+            putInt("module_corner_radius", previewTheme.moduleCornerRadiusDp)
+            putInt("output_corner_radius", previewTheme.outputCornerRadiusDp)
+            putInt("header_corner_radius", previewTheme.headerCornerRadiusDp)
+            putInt("module_body_text_size", previewTheme.moduleBodyTextSizeSp)
+            putInt("output_header_text_size", previewTheme.outputHeaderTextSizeSp)
+            putBoolean("enable_cyberdeck_mode", previewTheme.cyberdeckMode)
+            putBoolean("enable_crt_filter", previewTheme.crtFilter)
         }
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.sendAppPrivateCommand(previewInput, RetuiKeyboardService.ACTION_APPLY_THEME, data)
@@ -1882,9 +1897,9 @@ class KeyboardSettingsActivity : ComponentActivity() {
 
     private fun systemTopInset(insets: WindowInsets): Int {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            insets.getInsets(WindowInsets.Type.systemBars()).top
+            insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()).top
         } else {
-            legacySystemWindowInsetTop(insets)
+            max(legacySystemWindowInsetTop(insets), legacyDisplayCutoutInsetTop(insets))
         }
     }
 
@@ -1898,6 +1913,9 @@ class KeyboardSettingsActivity : ComponentActivity() {
 
     @Suppress("DEPRECATION")
     private fun legacySystemWindowInsetTop(insets: WindowInsets): Int = insets.systemWindowInsetTop
+
+    private fun legacyDisplayCutoutInsetTop(insets: WindowInsets): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) insets.displayCutout?.safeInsetTop ?: 0 else 0
 
     @Suppress("DEPRECATION")
     private fun legacySystemWindowInsetBottom(insets: WindowInsets): Int = insets.systemWindowInsetBottom
