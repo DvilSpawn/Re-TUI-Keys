@@ -13,8 +13,8 @@ object LocalClipboardStore {
     fun items(prefs: SharedPreferences, retentionDays: Int, now: Long = System.currentTimeMillis()): List<LocalClipboardItem> {
         val maxAgeMs = retentionDays.coerceIn(1, 365).toLong() * DAY_MS
         val items = read(prefs)
-            .filter { now - it.lastUsedAt <= maxAgeMs }
-            .sortedByDescending { it.lastUsedAt }
+            .filter { it.pinned || now - it.lastUsedAt <= maxAgeMs }
+            .sortedWith(compareByDescending<LocalClipboardItem> { it.pinned }.thenByDescending { if (it.pinned) it.createdAt else it.lastUsedAt })
             .take(MAX_ITEMS)
         write(prefs, items)
         return items
@@ -35,6 +35,10 @@ object LocalClipboardStore {
         write(prefs, read(prefs).filterNot { it.text == text })
     }
 
+    fun setPinned(prefs: SharedPreferences, text: String, pinned: Boolean) {
+        write(prefs, read(prefs).map { if (it.text == text) it.copy(pinned = pinned) else it })
+    }
+
     fun clear(prefs: SharedPreferences) {
         prefs.edit().remove(KEY_ITEMS).apply()
     }
@@ -52,7 +56,8 @@ object LocalClipboardStore {
                 if (text.isBlank()) null else LocalClipboardItem(
                     text = text,
                     createdAt = obj?.optLong("createdAt") ?: 0L,
-                    lastUsedAt = obj?.optLong("lastUsedAt") ?: 0L
+                    lastUsedAt = obj?.optLong("lastUsedAt") ?: 0L,
+                    pinned = obj?.optBoolean("pinned") ?: false
                 )
             }
     }
@@ -65,6 +70,7 @@ object LocalClipboardStore {
                     .put("text", item.text)
                     .put("createdAt", item.createdAt)
                     .put("lastUsedAt", item.lastUsedAt)
+                    .put("pinned", item.pinned)
             )
         }
         prefs.edit().putString(KEY_ITEMS, array.toString()).apply()
@@ -90,5 +96,6 @@ object EmojiRecentsStore {
 data class LocalClipboardItem(
     val text: String,
     val createdAt: Long,
-    val lastUsedAt: Long
+    val lastUsedAt: Long,
+    val pinned: Boolean = false
 )

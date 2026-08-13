@@ -8,19 +8,18 @@ object KeyboardProfileBackup {
     private const val EXPORT_VERSION = 3
 
     private val profileKeys = listOf(
+        KeyboardPrefs.KEY_ACCEPT_LAUNCHER_FRAMES,
         KeyboardPrefs.KEY_BACKGROUND_IMAGE_OPACITY,
         KeyboardPrefs.KEY_BACKGROUND_IMAGE_URI,
         KeyboardPrefs.KEY_BOTTOM_MARGIN_DP,
         KeyboardPrefs.KEY_CHARACTER_SIZE_SP,
         KeyboardPrefs.KEY_CORNER_RADIUS_DP,
-        KeyboardPrefs.KEY_HEIGHT_PERCENT,
         KeyboardPrefs.KEY_HORIZONTAL_MARGIN_DP,
         KeyboardPrefs.KEY_KEY_GAP_DP,
         KeyboardPrefs.KEY_LANDSCAPE_HEIGHT_PERCENT,
         KeyboardPrefs.KEY_DELETE_WHOLE_WORD,
         KeyboardPrefs.KEY_DOUBLE_SPACE_PERIOD,
         KeyboardPrefs.KEY_LEARN_LOCAL_WORDS,
-        KeyboardPrefs.KEY_LEGACY_OUTER_MARGIN_DP,
         KeyboardPrefs.KEY_LOCAL_SUGGESTIONS,
         KeyboardPrefs.KEY_PORTRAIT_HEIGHT_PERCENT,
         KeyboardPrefs.KEY_QUICK_PERIOD,
@@ -31,18 +30,7 @@ object KeyboardProfileBackup {
         KeyboardPrefs.KEY_STROKE_WIDTH_DP,
         KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN,
         KeyboardPrefs.KEY_VIBRATE_ON_KEYPRESS,
-        "theme.bg",
-        "theme.text",
-        "theme.border",
-        "theme.panelBg",
-        "theme.headerBg",
-        "theme.headerTabBorder",
-        "theme.headerText",
-        "theme.keyBg",
-        "theme.keyText",
-        "theme.outputBg",
-        "theme.outputBorder",
-        "theme.fontSizeSp",
+        *KeyboardPrefs.THEME_SNAPSHOT_SUFFIXES.map { "theme.$it" }.toTypedArray(),
         "theme.dashedBorders",
         "theme.dashLengthDp",
         "theme.dashGapDp",
@@ -55,6 +43,13 @@ object KeyboardProfileBackup {
         "theme.cyberdeckMode",
         "theme.crtFilter"
     )
+
+    private val legacyImportKeys = listOf(
+        KeyboardPrefs.KEY_HEIGHT_PERCENT,
+        KeyboardPrefs.KEY_LEGACY_OUTER_MARGIN_DP
+    )
+
+    private val acceptedProfileKeys = profileKeys + legacyImportKeys
 
     fun exportJson(prefs: SharedPreferences): String {
         return JSONObject()
@@ -74,7 +69,7 @@ object KeyboardProfileBackup {
         }
 
         val editor = prefs.edit()
-        profileKeys.forEach { editor.remove(it) }
+        acceptedProfileKeys.forEach { editor.remove(it) }
         val rawPreferences = root.optJSONObject("preferences")
         val preferenceCount = importPreferences(rawPreferences, editor)
         if (rawPreferences != null && !rawPreferences.has(KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN) && containsLegacyThemeOverride(rawPreferences)) {
@@ -120,7 +115,7 @@ object KeyboardProfileBackup {
         raw ?: return 0
         var count = 0
         raw.keys().forEach { key ->
-            if (!profileKeys.contains(key)) return@forEach
+            if (!acceptedProfileKeys.contains(key)) return@forEach
             val item = raw.optJSONObject(key) ?: return@forEach
             val type = item.optString("type", "")
             if (!item.has("value")) return@forEach

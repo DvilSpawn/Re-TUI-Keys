@@ -1,5 +1,6 @@
 package com.dvil.retui.keyboard
 
+import com.dvil.retui.contract.RetuiVisualContract
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.SharedPreferences
@@ -47,6 +48,7 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import android.widget.FrameLayout
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.PopupWindow
 import android.widget.ScrollView
@@ -61,8 +63,10 @@ import kotlin.math.roundToInt
 
 class RetuiKeyboardService : InputMethodService() {
     private lateinit var prefs: SharedPreferences
+    private lateinit var frameRenderer: LauncherFrameRenderer
     private var theme = ThemeState()
     private var layout = KeyboardLayoutSettings(
+        acceptLauncherFrames = KeyboardPrefs.DEFAULT_ACCEPT_LAUNCHER_FRAMES,
         backgroundImageOpacity = KeyboardPrefs.DEFAULT_BACKGROUND_IMAGE_OPACITY,
         backgroundImageUri = null,
         bottomMarginDp = KeyboardPrefs.DEFAULT_BOTTOM_MARGIN_DP,
@@ -70,6 +74,7 @@ class RetuiKeyboardService : InputMethodService() {
         characterSizeSp = KeyboardPrefs.DEFAULT_CHARACTER_SIZE_SP,
         clipboardRetentionDays = KeyboardPrefs.DEFAULT_CLIPBOARD_RETENTION_DAYS,
         cornerRadiusDp = KeyboardPrefs.DEFAULT_CORNER_RADIUS_DP,
+        fontUri = null,
         horizontalMarginDp = KeyboardPrefs.DEFAULT_HORIZONTAL_MARGIN_DP,
         keyGapDp = KeyboardPrefs.DEFAULT_KEY_GAP_DP,
         landscapeHeightPercent = KeyboardPrefs.DEFAULT_LANDSCAPE_HEIGHT_PERCENT,
@@ -101,6 +106,9 @@ class RetuiKeyboardService : InputMethodService() {
     private var modeLabel = "COMMAND"
     private var cachedBackgroundBitmap: Bitmap? = null
     private var cachedBackgroundUri: String? = null
+    private var cachedFontUri: String? = null
+    private var cachedTypeface: Typeface? = null
+    private var activeKeyPreview: PopupWindow? = null
     private val repeatHandler = Handler(Looper.getMainLooper())
     private var repeatRunnable: Runnable? = null
     private var suggestionRefreshPosted = false
@@ -123,6 +131,7 @@ class RetuiKeyboardService : InputMethodService() {
         super.onCreate()
         prefs = getSharedPreferences(KeyboardPrefs.PREFS_NAME, MODE_PRIVATE)
         KeyboardPrefs.migrateLayout(prefs)
+        frameRenderer = LauncherFrameRenderer(this, prefs)
         LocalDictionary.preload(applicationContext)
         loadPersistedTheme()
         makeImeWindowTransparent()
@@ -158,6 +167,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        dismissActiveKeyPreview()
         stopRepeat()
         cancelSuggestionRefresh()
         suggestionStrip = null
@@ -166,6 +176,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     override fun onFinishInput() {
+        dismissActiveKeyPreview()
         stopRepeat()
         cancelSuggestionRefresh()
         suggestionStrip = null
@@ -174,11 +185,13 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        dismissActiveKeyPreview()
         stopRepeat()
         cancelSuggestionRefresh()
         cachedBackgroundBitmap?.recycle()
         cachedBackgroundBitmap = null
         cachedBackgroundUri = null
+        frameRenderer.close()
         super.onDestroy()
     }
 
@@ -222,6 +235,7 @@ class RetuiKeyboardService : InputMethodService() {
                 val themeChanged = loadPersistedTheme()
                 val nextLayout = KeyboardPrefs.readLayout(prefs)
                 if (themeChanged || nextLayout != layout) {
+                    if (nextLayout.acceptLauncherFrames != layout.acceptLauncherFrames) frameRenderer.reload()
                     setInputView(buildKeyboardView())
                 }
             }
@@ -322,7 +336,8 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun clipboardBodyOverlay(): LinearLayout {
         val body = keyboardBody()
-        body.background = panel(theme.panelBg, theme.border, 6, notch = true)
+        body.background = frameRenderer.drawable(theme.panelBg)
+            ?: panel(theme.panelBg, theme.border, 6, notch = true)
         body.addView(clipboardListScroll(), weightedRowParams())
         body.addView(clipboardControlRow(), rowParams(emojiControlHeightDp()))
         return body
@@ -445,7 +460,7 @@ class RetuiKeyboardService : InputMethodService() {
         cell.typeface = Typeface.DEFAULT
         cell.contentDescription = "Insert emoji $emoji"
         cell.setTextColor(theme.keyText)
-        cell.background = keyVisualInset(panel(theme.keyBg, theme.border, 5))
+        cell.background = ColorDrawable(Color.TRANSPARENT)
         bindTapKey(cell) {
             EmojiRecentsStore.record(prefs, emoji)
             commitEmoji(emoji)
@@ -531,16 +546,50 @@ class RetuiKeyboardService : InputMethodService() {
         cell.maxLines = 2
         cell.ellipsize = TextUtils.TruncateAt.END
         cell.setPadding(dp(10), 0, dp(10), 0)
-        cell.background = keyVisualInset(panel(theme.keyBg, theme.border, 5))
+        cell.background = ColorDrawable(Color.TRANSPARENT)
         bindTapKey(cell) {
             pasteClipboardItem(item.text)
         }
         cell.setOnLongClickListener {
-            LocalClipboardStore.remove(prefs, item.text)
-            setInputView(buildKeyboardView())
+            showClipboardItemActions(cell, item)
             true
         }
         return cell
+    }
+
+    private fun showClipboardItemActions(anchor: View, item: LocalClipboardItem) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = frameRenderer.drawable(theme.panelBg) ?: panel(theme.panelBg, theme.border, 4)
+            elevation = dpFloat(8f)
+        }
+        val width = dp(96)
+        val height = dp(46)
+        val popup = PopupWindow(row, width, height, true).apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            isOutsideTouchable = true
+            isClippingEnabled = false
+            elevation = dpFloat(8f)
+        }
+        fun action(icon: Int, description: String, run: () -> Unit) = ImageButton(this).apply {
+            contentDescription = description
+            setImageResource(icon)
+            imageTintList = null
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = ColorDrawable(Color.TRANSPARENT)
+            setOnClickListener {
+                run()
+                popup.dismiss()
+                setInputView(buildKeyboardView())
+            }
+        }
+        row.addView(action(if (item.pinned) R.drawable.ic_clipboard_unpin else R.drawable.ic_clipboard_pin, if (item.pinned) "Unpin clipboard item" else "Pin clipboard item") {
+            LocalClipboardStore.setPinned(prefs, item.text, !item.pinned)
+        }, LinearLayout.LayoutParams(0, -1, 1f))
+        row.addView(action(R.drawable.ic_clipboard_delete, "Delete clipboard item") {
+            LocalClipboardStore.remove(prefs, item.text)
+        }, LinearLayout.LayoutParams(0, -1, 1f))
+        popup.showAsDropDown(anchor, (anchor.width - width) / 2, -anchor.height - height - dp(6))
     }
 
     private fun clipboardEmptyCell(): TextView {
@@ -625,7 +674,8 @@ class RetuiKeyboardService : InputMethodService() {
         outer.orientation = LinearLayout.HORIZONTAL
         outer.gravity = Gravity.CENTER_VERTICAL
         outer.setPadding(dp(layout.keyGapDp + 2), dp(layout.keyGapDp), dp(layout.keyGapDp + 2), dp(layout.keyGapDp))
-        outer.background = panel(theme.panelBg, theme.border, 6, notch = true)
+        outer.background = frameRenderer.drawable(theme.panelBg)
+            ?: panel(theme.panelBg, theme.border, 6, notch = true)
 
         val chips = LinearLayout(this)
         chips.orientation = LinearLayout.HORIZONTAL
@@ -675,13 +725,7 @@ class RetuiKeyboardService : InputMethodService() {
         view.textSize = keyTextSize(chip.label).toFloat()
         view.gravity = Gravity.CENTER
         view.setTextColor(theme.keyText)
-        view.background = keyVisualInset(
-            panel(
-                if (chip.action == SuggestionAction.ADD_WORD) brightenColor(theme.keyBg, 1.12f, 28) else theme.keyBg,
-                theme.border,
-                5
-            )
-        )
+        view.background = ColorDrawable(Color.TRANSPARENT)
         bindImmediateKey(view, action = {
             when (chip.action) {
                 SuggestionAction.ADD_WORD -> {
@@ -744,19 +788,6 @@ class RetuiKeyboardService : InputMethodService() {
         }
 
         return out
-    }
-
-    private fun controlRail(): LinearLayout {
-        val rail = LinearLayout(this)
-        rail.orientation = LinearLayout.VERTICAL
-        rail.setPadding(dp(layout.keyGapDp + 2), dp(layout.keyGapDp + 2), dp(layout.keyGapDp + 1), dp(layout.keyGapDp + 2))
-        rail.background = panel(theme.panelBg, theme.border, 6, notch = true)
-        addRailKey(rail, ICON_ESCAPE) { sendKeyCode(KeyEvent.KEYCODE_ESCAPE) }
-        addRailKey(rail, ICON_TAB) { commit("\t") }
-        addRailKey(rail, ICON_LEFT) { sendKeyCode(KeyEvent.KEYCODE_DPAD_LEFT) }
-        addRailKey(rail, ICON_RIGHT) { sendKeyCode(KeyEvent.KEYCODE_DPAD_RIGHT) }
-        addRailKey(rail, ICON_HIDE) { requestHideSelf(0) }
-        return rail
     }
 
     private fun addTextRows(parent: LinearLayout, landscape: Boolean) {
@@ -932,28 +963,6 @@ class RetuiKeyboardService : InputMethodService() {
         )
     }
 
-    private fun addPortraitTextRows(parent: LinearLayout) {
-        addKeyRow(parent, textRow("qwertyuiop"), 42)
-        addKeyRow(parent, textRow("asdfghjkl", leadingSpacer = 0.55f, trailingSpacer = 0.55f), 42)
-        val third = mutableListOf(KeySpec(ICON_SHIFT, 1.35f, Special.SHIFT))
-        third.addAll(textRow("zxcvbnm"))
-        third.add(KeySpec(ICON_BACKSPACE, 1.35f, Special.BACKSPACE))
-        addKeyRow(parent, third, 42)
-        addKeyRow(parent, portraitBottomRow(), 46)
-    }
-
-    private fun controlKeysPortrait(): List<KeySpec> {
-        return listOf(
-            KeySpec(ICON_ESCAPE, 1f, keyCode = KeyEvent.KEYCODE_ESCAPE),
-            KeySpec(ICON_TAB, 1f, text = "\t"),
-            KeySpec(ICON_LEFT, 1f, keyCode = KeyEvent.KEYCODE_DPAD_LEFT),
-            KeySpec(ICON_RIGHT, 1f, keyCode = KeyEvent.KEYCODE_DPAD_RIGHT),
-            KeySpec(ICON_UP, 1f, keyCode = KeyEvent.KEYCODE_DPAD_UP),
-            KeySpec(ICON_DOWN, 1f, keyCode = KeyEvent.KEYCODE_DPAD_DOWN),
-            KeySpec(ICON_HIDE, 1f, Special.HIDE)
-        )
-    }
-
     private fun numberRow(landscapeLongPress: Boolean = false): List<KeySpec> {
         if (!landscapeLongPress) {
             return listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0").map { KeySpec(it, text = it) }
@@ -1046,19 +1055,6 @@ class RetuiKeyboardService : InputMethodService() {
             KeySpec("SPACE", 5.2f, Special.SPACE),
             enterKey(1.8f)
         )
-    }
-
-    private fun portraitNumpad(): LinearLayout {
-        val pad = LinearLayout(this)
-        pad.orientation = LinearLayout.VERTICAL
-        pad.setPadding(dp(layout.keyGapDp), dp(layout.keyGapDp), dp(layout.keyGapDp), dp(layout.keyGapDp))
-        pad.background = panel(theme.panelBg, theme.border, 6, notch = true)
-
-        val rows = if (symbols) portraitSymbolPadRows() else portraitNumberPadRows()
-        rows.forEachIndexed { index, row ->
-            addKeyRow(pad, row, if (index == rows.lastIndex) 46 else 42)
-        }
-        return pad
     }
 
     private fun portraitNumberPadRows(): List<List<KeySpec>> {
@@ -2044,6 +2040,7 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun showKeyPreview(anchor: View, label: String?, description: String? = null): PopupWindow? {
         if (label.isNullOrBlank()) return null
+        dismissActiveKeyPreview()
         val preview = keyLabel(label, Gravity.CENTER, max(14, keyTextSize(label) + 4))
         preview.setTextColor(theme.keyText)
         preview.background = panel(brightenColor(theme.keyBg, 1.22f, 30), theme.border, 4)
@@ -2062,6 +2059,13 @@ class RetuiKeyboardService : InputMethodService() {
         val yOffset = -anchor.height - height - dp(18)
         return try {
             popup.showAsDropDown(anchor, xOffset, yOffset)
+            activeKeyPreview = popup
+            popup.setOnDismissListener {
+                if (activeKeyPreview === popup) activeKeyPreview = null
+            }
+            repeatHandler.postDelayed({
+                if (activeKeyPreview === popup) popup.dismiss()
+            }, KEY_PREVIEW_TIMEOUT_MS)
             popup
         } catch (_: Exception) {
             null
@@ -2109,10 +2113,31 @@ class RetuiKeyboardService : InputMethodService() {
         view.includeFontPadding = false
         view.maxLines = 1
         view.isSingleLine = true
-        view.typeface = Typeface.MONOSPACE
+        view.typeface = keyboardTypeface()
         view.textSize = sizeSp.toFloat()
         view.setTextColor(theme.keyText)
         return view
+    }
+
+    private fun keyboardTypeface(): Typeface {
+        val uri = layout.fontUri
+        if (uri == cachedFontUri) return cachedTypeface ?: Typeface.MONOSPACE
+        cachedFontUri = uri
+        cachedTypeface = uri?.let {
+            try {
+                contentResolver.openFileDescriptor(Uri.parse(it), "r")?.use { descriptor ->
+                    Typeface.Builder(descriptor.fileDescriptor).build()
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+        return cachedTypeface ?: Typeface.MONOSPACE
+    }
+
+    private fun dismissActiveKeyPreview() {
+        activeKeyPreview?.dismiss()
+        activeKeyPreview = null
     }
 
     private fun keyTextSize(label: String): Int {
@@ -2430,6 +2455,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun keyStateBackground(fill: Int, stroke: Int, active: Boolean): Drawable {
         val normalFill = if (active) brightenColor(fill, 1.16f, 36) else fill
         val pressedFill = brightenColor(normalFill, 1.22f, 42)
+        frameRenderer.drawable(normalFill, pressedFill)?.let { return it }
         return StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_pressed), panel(pressedFill, stroke, 5))
             addState(intArrayOf(), panel(normalFill, stroke, 5))
@@ -2439,11 +2465,6 @@ class RetuiKeyboardService : InputMethodService() {
     private fun keyVisualInset(drawable: Drawable): Drawable {
         val inset = dp(layout.keyGapDp)
         return if (inset <= 0) drawable else InsetDrawable(drawable, inset, inset, inset, inset)
-    }
-
-    private fun keyFillColor(active: Boolean): Int {
-        if (!active) return theme.keyBg
-        return brightenColor(theme.keyBg, 1.16f, 36)
     }
 
     private fun specialKeyFillColor(active: Boolean): Int {
@@ -3212,7 +3233,9 @@ class RetuiKeyboardService : InputMethodService() {
         if (raw.isNullOrBlank()) return
         val payload = when {
             raw.startsWith(PRIVATE_OPTIONS_PREFIX) -> raw.substringAfter(':', raw)
-            raw.contains("theme_bg=") || raw.contains("module_bg_color=") -> raw
+            raw.contains(RetuiVisualContract.BG + "=") ||
+                raw.contains("theme_bg=") ||
+                raw.contains("module_bg_color=") -> raw
             else -> return
         }
         val bundle = Bundle()
@@ -3228,6 +3251,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun applyContextBundle(bundle: Bundle, source: ThemeSource): Boolean {
         val previousTheme = theme
         val previousSymbols = symbols
+        val frameChanged = source == ThemeSource.LAUNCHER && frameRenderer.accept(bundle)
         if (source == ThemeSource.LAUNCHER) {
             if (containsThemeValue(bundle)) {
                 val launcherTheme = themeFromBundle(
@@ -3243,57 +3267,31 @@ class RetuiKeyboardService : InputMethodService() {
             theme = themeFromBundle(theme, bundle)
         }
 
-        readString(bundle, "keyboard_context", "retui_context", "path")?.let { contextLabel = compactContext(it) }
-        readString(bundle, "keyboard_mode", "retui_mode", "mode")?.let { modeLabel = it.uppercase().take(14) }
-        readBoolean(bundle, null, "keyboard_symbols", "symbols")?.let { symbols = it }
-        return theme != previousTheme || symbols != previousSymbols
+        RetuiVisualContract.string(bundle, RetuiVisualContract.CONTEXT, "keyboard_context", "path")?.let { contextLabel = compactContext(it) }
+        RetuiVisualContract.string(bundle, RetuiVisualContract.MODE, "keyboard_mode", "mode")?.let { modeLabel = it.uppercase().take(14) }
+        RetuiVisualContract.booleanOrNull(bundle, "keyboard_symbols", "symbols")?.let { symbols = it }
+        return theme != previousTheme || symbols != previousSymbols || frameChanged
     }
 
     private fun themeFromBundle(base: ThemeState, bundle: Bundle): ThemeState {
+        val C = RetuiVisualContract
         return base.copy(
-            bg = readColor(bundle, base.bg, "theme_bg", "background_color", "theme_background_color"),
-            text = readColor(bundle, base.text, "theme_text", "output_text_color", "theme_text_color"),
-            border = readColor(bundle, base.border, "theme_border", "terminal_border_color", "module_border_color"),
-            panelBg = readColor(bundle, base.panelBg, "terminal_bg", "terminal_window_background_color", "module_bg_color"),
-            headerBg = readColor(
+            bg = C.color(bundle, base.bg, C.BG),
+            text = C.color(bundle, base.text, C.TEXT),
+            border = C.color(bundle, base.border, C.BORDER),
+            panelBg = C.color(bundle, base.panelBg, C.TERMINAL_BG, C.PANEL_BG),
+            headerBg = C.color(bundle, base.headerBg, C.HEADER_BG),
+            headerTabBorder = C.color(
                 bundle,
-                base.headerBg,
-                "terminal_header_background_color",
-                "terminal_header_tab_background_color",
-                "module_header_bg_color"
-            ),
-            headerTabBorder = readColor(
-                bundle,
-                base.headerTabBorder,
+                C.color(bundle, base.headerTabBorder, C.PANEL_BORDER, C.BORDER),
                 "terminal_header_border_color",
                 "terminal_header_tab_border_color",
                 "header_tab_border_color"
             ),
-            headerText = readColor(
-                bundle,
-                base.headerText,
-                "module_text_color",
-                "module_header_text_color",
-                "terminal_header_text_color",
-                "notification_widget_text_color"
-            ),
-            keyBg = readColor(
-                bundle,
-                base.keyBg,
-                "module_button_background_color",
-                "module_button_bg_color",
-                "input_bg_color",
-                "input_background_color"
-            ),
-            keyText = readColor(
-                bundle,
-                base.keyText,
-                "module_button_text_color",
-                "module_text_color",
-                "input_text_color",
-                "input_text"
-            ),
-            specialKeyBg = readColor(
+            headerText = C.color(bundle, base.headerText, C.HEADER_TEXT, C.PANEL_TEXT),
+            keyBg = C.color(bundle, base.keyBg, C.BUTTON_BG, C.INPUT_BG),
+            keyText = C.color(bundle, base.keyText, C.BUTTON_TEXT, C.INPUT_TEXT, C.PANEL_TEXT),
+            specialKeyBg = C.color(
                 bundle,
                 base.specialKeyBg,
                 "keyboard_special_key_bg",
@@ -3301,88 +3299,33 @@ class RetuiKeyboardService : InputMethodService() {
                 "special_key_bg_color",
                 "special_key_background_color"
             ),
-            specialKeyText = readColor(
+            specialKeyText = C.color(
                 bundle,
                 base.specialKeyText,
                 "keyboard_special_key_text",
                 "keyboard_special_key_text_color",
                 "special_key_text_color"
             ),
-            outputBg = readColor(bundle, base.outputBg, "output_bg_color", "output_background_color", "output_bg"),
-            outputBorder = readColor(bundle, base.outputBorder, "output_border_color", "output_border", "terminal_border_color"),
-            fontSizeSp = readInt(bundle, base.fontSizeSp, "input_font_size", "keyboard_font_size"),
-            dashedBorders = readBoolean(
-                bundle,
-                base.dashedBorders,
-                "enable_dashed_border",
-                "dashed_borders",
-                "dashed_border",
-                "terminal_dashed_borders"
-            ) ?: base.dashedBorders,
-            dashLengthDp = readInt(bundle, base.dashLengthDp, "dashed_border_dash_length", "dash_length", "terminal_dash_length"),
-            dashGapDp = readInt(bundle, base.dashGapDp, "dashed_border_gap_length", "dash_gap", "terminal_dash_gap"),
-            dashedStrokeWidthDp = readFloat(
+            outputBg = C.color(bundle, base.outputBg, C.OUTPUT_BG),
+            outputBorder = C.color(bundle, base.outputBorder, C.OUTPUT_BORDER, C.BORDER),
+            fontSizeSp = C.int(bundle, base.fontSizeSp, C.INPUT_FONT_SIZE, "keyboard_font_size").coerceIn(10, 24),
+            dashedBorders = C.boolean(bundle, base.dashedBorders, C.DASHED_BORDERS),
+            dashLengthDp = C.int(bundle, base.dashLengthDp, C.DASHED_BORDER_DASH_LENGTH, "dash_length", "terminal_dash_length").coerceIn(0, 48),
+            dashGapDp = C.int(bundle, base.dashGapDp, C.DASHED_BORDER_GAP_LENGTH, "dash_gap", "terminal_dash_gap").coerceIn(0, 48),
+            dashedStrokeWidthDp = C.float(
                 bundle,
                 base.dashedStrokeWidthDp,
+                C.DASHED_BORDER_STROKE_WIDTH_DP,
                 "dashed_border_stroke_width",
-                "dashed_border_stroke_width_dp",
                 "dash_stroke_width"
-            ),
-            moduleCornerRadiusDp = readInt(
-                bundle,
-                base.moduleCornerRadiusDp,
-                "module_corner_radius",
-                "module_corner_radius_dp",
-                "corner_radius",
-                "corner_radius_dp"
-            ),
-            outputCornerRadiusDp = readInt(
-                bundle,
-                base.outputCornerRadiusDp,
-                "output_corner_radius",
-                "output_corner_radius_dp",
-                "terminal_corner_radius"
-            ),
-            headerCornerRadiusDp = readInt(
-                bundle,
-                base.headerCornerRadiusDp,
-                "header_corner_radius",
-                "header_corner_radius_dp",
-                "terminal_header_corner_radius"
-            ),
-            moduleBodyTextSizeSp = readInt(
-                bundle,
-                base.moduleBodyTextSizeSp,
-                "module_body_text_size",
-                "module_body_text_size_sp",
-                "module_output_text_size",
-                "output_font_size"
-            ),
-            outputHeaderTextSizeSp = readInt(
-                bundle,
-                base.outputHeaderTextSizeSp,
-                "output_header_text_size",
-                "output_header_text_size_sp",
-                "module_header_text_size",
-                "module_header_text_size_sp",
-                "header_font_size"
-            ),
-            cyberdeckMode = readBoolean(
-                bundle,
-                base.cyberdeckMode,
-                "enable_cyberdeck_mode",
-                "cyberdeck_mode",
-                "cyberdeck",
-                "enable_cyberdeck"
-            ) ?: base.cyberdeckMode,
-            crtFilter = readBoolean(
-                bundle,
-                base.crtFilter,
-                "enable_crt_filter",
-                "crt_filter",
-                "crt",
-                "enable_crt"
-            ) ?: base.crtFilter
+            ).let { if (it.isFinite()) it.coerceIn(0.5f, 8f) else base.dashedStrokeWidthDp },
+            moduleCornerRadiusDp = C.int(bundle, base.moduleCornerRadiusDp, C.MODULE_CORNER_RADIUS, "corner_radius", "corner_radius_dp").coerceIn(0, 48),
+            outputCornerRadiusDp = C.int(bundle, base.outputCornerRadiusDp, C.OUTPUT_CORNER_RADIUS, "terminal_corner_radius").coerceIn(0, 48),
+            headerCornerRadiusDp = C.int(bundle, base.headerCornerRadiusDp, C.HEADER_CORNER_RADIUS, "terminal_header_corner_radius").coerceIn(0, 48),
+            moduleBodyTextSizeSp = C.int(bundle, base.moduleBodyTextSizeSp, C.BODY_TEXT_SIZE, "output_font_size").coerceIn(8, 32),
+            outputHeaderTextSizeSp = C.int(bundle, base.outputHeaderTextSizeSp, C.OUTPUT_HEADER_TEXT_SIZE, C.HEADER_TEXT_SIZE, "header_font_size").coerceIn(8, 32),
+            cyberdeckMode = C.boolean(bundle, base.cyberdeckMode, C.CYBERDECK_MODE),
+            crtFilter = C.boolean(bundle, base.crtFilter, C.CRT_FILTER)
         )
     }
 
@@ -3466,67 +3409,9 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun containsThemeValue(bundle: Bundle): Boolean {
-        return THEME_BUNDLE_KEYS.any { bundle.containsKey(it) }
-    }
-
-    private fun readColor(bundle: Bundle, fallback: Int, vararg keys: String): Int {
-        return parseColorValue(firstValue(bundle, *keys)) ?: fallback
-    }
-
-    private fun readInt(bundle: Bundle, fallback: Int, vararg keys: String): Int {
-        val value = firstValue(bundle, *keys) ?: return fallback
-        if (value is Number) return value.toInt()
-        return value.toString().trim().toIntOrNull() ?: fallback
-    }
-
-    private fun readFloat(bundle: Bundle, fallback: Float, vararg keys: String): Float {
-        val value = firstValue(bundle, *keys) ?: return fallback
-        if (value is Number) return value.toFloat()
-        return value.toString().trim().toFloatOrNull() ?: fallback
-    }
-
-    private fun readString(bundle: Bundle, vararg keys: String): String? {
-        val value = firstValue(bundle, *keys) ?: return null
-        return value.toString().trim().takeIf { it.isNotEmpty() }
-    }
-
-    private fun readBoolean(bundle: Bundle, fallback: Boolean?, vararg keys: String): Boolean? {
-        val value = firstValue(bundle, *keys) ?: return fallback
-        if (value is Boolean) return value
-        val raw = value.toString().trim().lowercase()
-        return when (raw) {
-            "1", "true", "yes", "on" -> true
-            "0", "false", "no", "off" -> false
-            else -> fallback
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun firstValue(bundle: Bundle, vararg keys: String): Any? {
-        for (key in keys) {
-            if (bundle.containsKey(key)) return bundle.get(key)
-        }
-        return null
-    }
-
-    private fun parseColorValue(value: Any?): Int? {
-        if (value == null) return null
-        if (value is Number) return value.toInt()
-        val raw = value.toString().trim()
-        if (raw.isEmpty()) return null
-        return try {
-            when {
-                raw.startsWith("#") -> Color.parseColor(raw)
-                raw.startsWith("0x", ignoreCase = true) -> {
-                    var parsed = raw.substring(2).toLong(16)
-                    if (raw.length <= 8) parsed = parsed or 0xff000000L
-                    parsed.toInt()
-                }
-                else -> raw.toInt()
-            }
-        } catch (_: Exception) {
-            null
-        }
+        return RetuiVisualContract.hasVisualPayload(bundle) ||
+            bundle.containsKey("keyboard_special_key_bg") ||
+            bundle.containsKey("keyboard_special_key_text")
     }
 
     private fun isCommandLikeField(info: EditorInfo): Boolean {
@@ -3538,15 +3423,6 @@ class RetuiKeyboardService : InputMethodService() {
             action == EditorInfo.IME_ACTION_GO ||
             action == EditorInfo.IME_ACTION_SEND ||
             klass == InputType.TYPE_CLASS_TEXT && info.hintText?.contains("$") == true
-    }
-
-    private fun inputTypeLabel(inputType: Int): String {
-        return when (inputType and InputType.TYPE_MASK_CLASS) {
-            InputType.TYPE_CLASS_NUMBER -> "NUMBER"
-            InputType.TYPE_CLASS_PHONE -> "PHONE"
-            InputType.TYPE_CLASS_DATETIME -> "DATE"
-            else -> "TEXT"
-        }
     }
 
     private fun compactPackageName(name: String?): String {
@@ -4139,6 +4015,7 @@ class RetuiKeyboardService : InputMethodService() {
         private const val DIRECTION_REPEAT_INITIAL_DELAY_MS = 360L
         private const val SHIFT_DOUBLE_TAP_MS = 360L
         private const val GLIDE_TRAIL_HOLD_MS = 180L
+        private const val KEY_PREVIEW_TIMEOUT_MS = 700L
         private const val ACTIVE_ADD_WORD_MIN_LENGTH = 4
         private const val SENTENCE_CONTEXT_CHARS = 128
         private const val NAV_MODE_GESTURAL = 2
@@ -4162,89 +4039,5 @@ class RetuiKeyboardService : InputMethodService() {
         private const val ICON_SHIFT = "⇧"
         private const val ICON_TAB = "TAB"
         private const val ICON_UP = "↑"
-        private val THEME_BUNDLE_KEYS = arrayOf(
-            "theme_bg",
-            "background_color",
-            "theme_background_color",
-            "theme_text",
-            "output_text_color",
-            "theme_text_color",
-            "theme_border",
-            "terminal_border_color",
-            "module_border_color",
-            "terminal_bg",
-            "terminal_window_background_color",
-            "module_bg_color",
-            "terminal_header_background_color",
-            "terminal_header_tab_background_color",
-            "module_header_bg_color",
-            "terminal_header_border_color",
-            "terminal_header_tab_border_color",
-            "header_tab_border_color",
-            "module_text_color",
-            "module_header_text_color",
-            "terminal_header_text_color",
-            "notification_widget_text_color",
-            "module_button_background_color",
-            "module_button_bg_color",
-            "input_bg_color",
-            "input_background_color",
-            "module_button_text_color",
-            "input_text_color",
-            "input_text",
-            "keyboard_special_key_bg",
-            "keyboard_special_key_background",
-            "special_key_bg_color",
-            "special_key_background_color",
-            "keyboard_special_key_text",
-            "keyboard_special_key_text_color",
-            "special_key_text_color",
-            "output_bg_color",
-            "output_background_color",
-            "output_bg",
-            "output_border_color",
-            "input_font_size",
-            "keyboard_font_size",
-            "enable_dashed_border",
-            "dashed_borders",
-            "dashed_border",
-            "terminal_dashed_borders",
-            "dashed_border_dash_length",
-            "dash_length",
-            "terminal_dash_length",
-            "dashed_border_gap_length",
-            "dash_gap",
-            "terminal_dash_gap",
-            "dashed_border_stroke_width",
-            "dashed_border_stroke_width_dp",
-            "dash_stroke_width",
-            "module_corner_radius",
-            "module_corner_radius_dp",
-            "corner_radius",
-            "corner_radius_dp",
-            "output_corner_radius",
-            "output_corner_radius_dp",
-            "terminal_corner_radius",
-            "header_corner_radius",
-            "header_corner_radius_dp",
-            "terminal_header_corner_radius",
-            "module_body_text_size",
-            "module_body_text_size_sp",
-            "module_output_text_size",
-            "output_font_size",
-            "output_header_text_size",
-            "output_header_text_size_sp",
-            "module_header_text_size",
-            "module_header_text_size_sp",
-            "header_font_size",
-            "enable_cyberdeck_mode",
-            "cyberdeck_mode",
-            "cyberdeck",
-            "enable_cyberdeck",
-            "enable_crt_filter",
-            "crt_filter",
-            "crt",
-            "enable_crt"
-        )
     }
 }

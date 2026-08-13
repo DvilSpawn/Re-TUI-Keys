@@ -18,6 +18,18 @@ class LocalStoresTest {
     }
 
     @Test
+    fun pinnedClipboardItemsIgnoreExpiryAndKeepAdditionOrder() {
+        val prefs = FakeSharedPreferences()
+        val day = 24L * 60L * 60L * 1000L
+        LocalClipboardStore.add(prefs, "first", 1, 1L)
+        LocalClipboardStore.add(prefs, "second", 1, 2L)
+        LocalClipboardStore.setPinned(prefs, "first", true)
+        LocalClipboardStore.setPinned(prefs, "second", true)
+
+        assertEquals(listOf("second", "first"), LocalClipboardStore.items(prefs, 1, day * 3).map { it.text })
+    }
+
+    @Test
     fun emojiRecentsMoveUsedEmojiToFront() {
         val prefs = FakeSharedPreferences()
 

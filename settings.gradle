@@ -14,3 +14,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "ReTUIKeyboard"
 include ':app'
+include ':retui-contract'
+project(':retui-contract').projectDir = new File(settingsDir, '../../StudioProjects/TUI-ConsoleLauncher-frames/retui-contract')
