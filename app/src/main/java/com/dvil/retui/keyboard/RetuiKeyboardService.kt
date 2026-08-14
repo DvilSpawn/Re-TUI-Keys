@@ -1,11 +1,13 @@
 package com.dvil.retui.keyboard
 
 import com.dvil.retui.contract.RetuiVisualContract
+import android.Manifest
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -35,6 +37,9 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.Settings
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.text.TextUtils
 import android.text.InputType
 import android.view.Gravity
@@ -53,6 +58,7 @@ import android.widget.LinearLayout
 import android.widget.PopupWindow
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -126,6 +132,45 @@ class RetuiKeyboardService : InputMethodService() {
     private var emojiMode = false
     private var clipboardMode = false
     private var emojiCategoryIndex = 0
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var voiceButton: ImageButton? = null
+    private var voiceListening = false
+    private var acceptVoiceResult = false
+
+    private val voiceRecognitionListener = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) = Unit
+        override fun onBeginningOfSpeech() = Unit
+        override fun onRmsChanged(rmsdB: Float) = Unit
+        override fun onBufferReceived(buffer: ByteArray?) = Unit
+        override fun onEndOfSpeech() = Unit
+
+        override fun onError(error: Int) {
+            val wasActive = acceptVoiceResult
+            finishVoiceSession()
+            if (wasActive && error != SpeechRecognizer.ERROR_CLIENT) {
+                Toast.makeText(this@RetuiKeyboardService, "No speech recognized", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        override fun onResults(results: Bundle?) {
+            val shouldCommit = acceptVoiceResult
+            finishVoiceSession()
+            if (!shouldCommit) return
+            val text = results
+                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                ?.firstOrNull()
+                ?.trim()
+                .orEmpty()
+            if (text.isEmpty()) return
+            currentInputConnection?.commitText(text, 1)
+            localWordBeforeCursor = ""
+            pendingAddWord = null
+            refreshSuggestionStripSoon()
+        }
+
+        override fun onPartialResults(partialResults: Bundle?) = Unit
+        override fun onEvent(eventType: Int, params: Bundle?) = Unit
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -167,6 +212,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        cancelVoiceInput()
         dismissActiveKeyPreview()
         stopRepeat()
         cancelSuggestionRefresh()
@@ -176,6 +222,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     override fun onFinishInput() {
+        cancelVoiceInput()
         dismissActiveKeyPreview()
         stopRepeat()
         cancelSuggestionRefresh()
@@ -185,6 +232,9 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        cancelVoiceInput()
+        speechRecognizer?.destroy()
+        speechRecognizer = null
         dismissActiveKeyPreview()
         stopRepeat()
         cancelSuggestionRefresh()
@@ -247,6 +297,7 @@ class RetuiKeyboardService : InputMethodService() {
         layout = KeyboardPrefs.readLayout(prefs)
         lastKeyboardViewSignature = keyboardViewSignature(layout)
         suggestionStrip = null
+        voiceButton = null
         glideKeyHits.clear()
         glideTrailView = null
         return if (isLandscape()) buildLandscapeKeyboard() else buildPortraitKeyboard()
@@ -682,6 +733,7 @@ class RetuiKeyboardService : InputMethodService() {
         chips.gravity = Gravity.CENTER_VERTICAL
         suggestionStrip = chips
         outer.addView(chips, LinearLayout.LayoutParams(0, -1, 1f))
+        outer.addView(voiceStripButton(), LinearLayout.LayoutParams(dp(if (isLandscape()) 34 else 40), -1))
         outer.addView(clipboardStripButton(), LinearLayout.LayoutParams(dp(if (isLandscape()) 34 else 40), -1))
         populateSuggestionStrip(chips)
         return outer
@@ -696,6 +748,90 @@ class RetuiKeyboardService : InputMethodService() {
             if (clipboardMode) closeClipboardMode() else openClipboardMode()
         }, dismissEmojiOnDown = false)
         return button
+    }
+
+    private fun voiceStripButton(): ImageButton {
+        val button = ImageButton(this).apply {
+            setImageResource(R.drawable.ic_mic)
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+        }
+        voiceButton = button
+        updateVoiceButton()
+        bindImmediateKey(button, action = { toggleVoiceInput() }, dismissEmojiOnDown = false)
+        return button
+    }
+
+    private fun toggleVoiceInput() {
+        when {
+            voiceListening -> {
+                voiceListening = false
+                updateVoiceButton()
+                speechRecognizer?.stopListening()
+            }
+            acceptVoiceResult -> cancelVoiceInput()
+            else -> startVoiceInput()
+        }
+    }
+
+    private fun startVoiceInput() {
+        if (currentInfo?.let(::isPasswordField) == true) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestHideSelf(0)
+            startActivity(Intent(this, MicrophonePermissionActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+            })
+            return
+        }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            Toast.makeText(this, "Voice typing unavailable", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val recognizer = speechRecognizer ?: try {
+            SpeechRecognizer.createSpeechRecognizer(this).also {
+                it.setRecognitionListener(voiceRecognitionListener)
+                speechRecognizer = it
+            }
+        } catch (_: RuntimeException) {
+            Toast.makeText(this, "Voice typing unavailable", Toast.LENGTH_SHORT).show()
+            return
+        }
+        acceptVoiceResult = true
+        voiceListening = true
+        updateVoiceButton()
+        try {
+            recognizer.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            })
+        } catch (_: RuntimeException) {
+            finishVoiceSession()
+            Toast.makeText(this, "Voice typing unavailable", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun cancelVoiceInput() {
+        val wasActive = acceptVoiceResult
+        finishVoiceSession()
+        if (wasActive) speechRecognizer?.cancel()
+    }
+
+    private fun finishVoiceSession() {
+        acceptVoiceResult = false
+        voiceListening = false
+        updateVoiceButton()
+    }
+
+    private fun updateVoiceButton() {
+        val button = voiceButton ?: return
+        button.contentDescription = when {
+            voiceListening -> "Stop voice typing"
+            acceptVoiceResult -> "Cancel voice typing"
+            else -> "Start voice typing"
+        }
+        button.setColorFilter(if (acceptVoiceResult) theme.specialKeyText else theme.keyText)
+        button.background = keyVisualInset(
+            if (acceptVoiceResult) specialKeyBackground(active = true) else panel(theme.keyBg, theme.border, 5)
+        )
     }
 
     private fun populateSuggestionStrip(strip: LinearLayout) {
