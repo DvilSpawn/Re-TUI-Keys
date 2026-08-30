@@ -43,6 +43,7 @@ dependencies.
 - Local suggestion strip above the keyboard.
 - User dictionary with visible local word list in settings.
 - Manual dictionary add/remove, backup, and restore.
+- Importable data-only language packs with an in-keyboard language switcher.
 - Theme sync from the launcher through IME-private data.
 - Optional number row, arrow row, quick period, haptics, sound, sizing, margins,
   key gaps, stroke width, and background image controls.
@@ -85,6 +86,19 @@ The settings screen includes a `DICTIONARY` section:
 Backup and restore are manual by design. The manifest disables Android backup
 and includes explicit backup/data extraction exclusion rules, so dictionary data
 stays local unless the user exports it.
+
+## Language Packs
+
+English ships with the app. Additional languages are `.retui-lang` ZIP files
+containing `manifest.json`, `words.tsv`, and an optional `LICENSE` or `NOTICE`.
+Users install a downloaded pack from `LANGUAGE PACKS` in Settings; the app
+validates it, stores it privately, and exposes it through the language key.
+
+The first pack is Persian (`fa-IR`) at
+`language-packs/dist/persian-fa-IR-v1.retui-lang`. It includes an RTL Persian
+layout, Persian digits and punctuation, zero-width non-joiner input, character
+normalization, and 50,000 offline completion entries. Language packs contain
+data only and cannot execute code.
 
 ## Launcher Theme Bridge
 

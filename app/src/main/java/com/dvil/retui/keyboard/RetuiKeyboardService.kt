@@ -108,6 +108,8 @@ class RetuiKeyboardService : InputMethodService() {
     private var lastShiftTapAtMs = 0L
     private var symbols = false
     private var currentInfo: EditorInfo? = null
+    private var installedLanguagePacks: List<LanguagePack> = emptyList()
+    private var activeLanguagePack: LanguagePack? = null
     private var contextLabel = "READY"
     private var modeLabel = "COMMAND"
     private var cachedBackgroundBitmap: Bitmap? = null
@@ -131,6 +133,7 @@ class RetuiKeyboardService : InputMethodService() {
     private var glideTrailView: GlideTrailView? = null
     private var emojiMode = false
     private var clipboardMode = false
+    private var clipboardClearPending = false
     private var emojiCategoryIndex = 0
     private var speechRecognizer: SpeechRecognizer? = null
     private var voiceButton: ImageButton? = null
@@ -176,8 +179,9 @@ class RetuiKeyboardService : InputMethodService() {
         super.onCreate()
         prefs = getSharedPreferences(KeyboardPrefs.PREFS_NAME, MODE_PRIVATE)
         KeyboardPrefs.migrateLayout(prefs)
-        frameRenderer = LauncherFrameRenderer(this, prefs)
+        frameRenderer = LauncherFrameRenderer.shared(this, prefs)
         LocalDictionary.preload(applicationContext)
+        reloadLanguagePacks()
         loadPersistedTheme()
         makeImeWindowTransparent()
     }
@@ -189,6 +193,7 @@ class RetuiKeyboardService : InputMethodService() {
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
         super.onStartInput(attribute, restarting)
         loadPersistedTheme()
+        reloadLanguagePacks()
         currentInfo = attribute
         if (!restarting) resetTransientLayoutState()
         applyEditorInfo(attribute)
@@ -200,11 +205,12 @@ class RetuiKeyboardService : InputMethodService() {
         loadPersistedTheme()
         currentInfo = info
         applyEditorInfo(info)
+        val languageChanged = reloadLanguagePacks()
         val nextLayout = KeyboardPrefs.readLayout(prefs)
         layout = nextLayout
         captureClipboardIfEnabled()
         val shiftedForEmptyInput = armShiftForEmptyInputIfNeeded()
-        if (shiftedForEmptyInput || keyboardViewSignature(nextLayout) != lastKeyboardViewSignature) {
+        if (languageChanged || shiftedForEmptyInput || keyboardViewSignature(nextLayout) != lastKeyboardViewSignature) {
             setInputView(buildKeyboardView())
         } else {
             refreshSuggestionStripSoon()
@@ -241,7 +247,6 @@ class RetuiKeyboardService : InputMethodService() {
         cachedBackgroundBitmap?.recycle()
         cachedBackgroundBitmap = null
         cachedBackgroundUri = null
-        frameRenderer.close()
         super.onDestroy()
     }
 
@@ -283,8 +288,9 @@ class RetuiKeyboardService : InputMethodService() {
             }
             ACTION_REFRESH_SETTINGS -> {
                 val themeChanged = loadPersistedTheme()
+                val languageChanged = reloadLanguagePacks()
                 val nextLayout = KeyboardPrefs.readLayout(prefs)
-                if (themeChanged || nextLayout != layout) {
+                if (themeChanged || languageChanged || nextLayout != layout) {
                     if (nextLayout.acceptLauncherFrames != layout.acceptLauncherFrames) frameRenderer.reload()
                     setInputView(buildKeyboardView())
                 }
@@ -350,7 +356,7 @@ class RetuiKeyboardService : InputMethodService() {
         val main = keyboardBody()
         if (usesNumberPad()) {
             addNumberPadRows(main, landscape)
-        } else if (landscape && layout.splitKeyboard) {
+        } else if (landscape && layout.splitKeyboard && activeLanguagePack == null) {
             addSplitTextRows(main)
         } else {
             addTextRows(main, landscape)
@@ -387,8 +393,11 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun clipboardBodyOverlay(): LinearLayout {
         val body = keyboardBody()
-        body.background = frameRenderer.drawable(theme.panelBg)
-            ?: panel(theme.panelBg, theme.border, 6, notch = true)
+        body.background = frameRenderer.drawable(
+            RetuiVisualContract.FRAME_ROLE_KEYBOARD,
+            theme.panelBg,
+            panel(theme.panelBg, theme.border, 6, notch = true)
+        )
         body.addView(clipboardListScroll(), weightedRowParams())
         body.addView(clipboardControlRow(), rowParams(emojiControlHeightDp()))
         return body
@@ -548,6 +557,24 @@ class RetuiKeyboardService : InputMethodService() {
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER
         row.setPadding(dp(layout.keyGapDp), dp(1), dp(layout.keyGapDp), dp(1))
+        if (clipboardClearPending) {
+            row.addView(
+                emojiActionCell("CANCEL", active = false, contentDescription = "Cancel clearing clipboard") {
+                    clipboardClearPending = false
+                    setInputView(buildKeyboardView())
+                },
+                LinearLayout.LayoutParams(0, -1, 1f)
+            )
+            row.addView(
+                emojiActionCell("CLEAR ALL?", active = true, contentDescription = "Confirm clear all clipboard history") {
+                    LocalClipboardStore.clear(prefs)
+                    clipboardClearPending = false
+                    setInputView(buildKeyboardView())
+                },
+                LinearLayout.LayoutParams(0, -1, 1.4f)
+            )
+            return row
+        }
         row.addView(
             emojiActionCell("ABC", active = false, contentDescription = "Return to letters") {
                 closeClipboardMode()
@@ -566,7 +593,7 @@ class RetuiKeyboardService : InputMethodService() {
         )
         row.addView(
             emojiActionCell("CLR", active = false, contentDescription = "Clear clipboard") {
-                LocalClipboardStore.clear(prefs)
+                clipboardClearPending = true
                 setInputView(buildKeyboardView())
             },
             LinearLayout.LayoutParams(0, -1, 1f)
@@ -611,7 +638,11 @@ class RetuiKeyboardService : InputMethodService() {
     private fun showClipboardItemActions(anchor: View, item: LocalClipboardItem) {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = frameRenderer.drawable(theme.panelBg) ?: panel(theme.panelBg, theme.border, 4)
+            background = frameRenderer.drawable(
+                RetuiVisualContract.FRAME_ROLE_KEYBOARD,
+                theme.panelBg,
+                panel(theme.panelBg, theme.border, 4)
+            )
             elevation = dpFloat(8f)
         }
         val width = dp(96)
@@ -709,7 +740,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun glideLayer(main: LinearLayout): View {
-        if (!layout.glideTyping || isLandscape() || symbols || usesNumberPad()) return main
+        if (!layout.glideTyping || activeLanguagePack != null || isLandscape() || symbols || usesNumberPad()) return main
         val frame = GlideLayerFrame(this)
         frame.addView(main, FrameLayout.LayoutParams(-1, -2))
         glideTrailView = GlideTrailView(this, theme.border, resources.displayMetrics.density).also { trail ->
@@ -725,12 +756,19 @@ class RetuiKeyboardService : InputMethodService() {
         outer.orientation = LinearLayout.HORIZONTAL
         outer.gravity = Gravity.CENTER_VERTICAL
         outer.setPadding(dp(layout.keyGapDp + 2), dp(layout.keyGapDp), dp(layout.keyGapDp + 2), dp(layout.keyGapDp))
-        outer.background = frameRenderer.drawable(theme.panelBg)
-            ?: panel(theme.panelBg, theme.border, 6, notch = true)
+        outer.background = frameRenderer.drawable(
+            RetuiVisualContract.FRAME_ROLE_KEYBOARD,
+            theme.panelBg,
+            panel(theme.panelBg, theme.border, 6, notch = true)
+        )
 
         val chips = LinearLayout(this)
         chips.orientation = LinearLayout.HORIZONTAL
         chips.gravity = Gravity.CENTER_VERTICAL
+        if (activeLanguagePack?.rtl == true) {
+            chips.layoutDirection = View.LAYOUT_DIRECTION_RTL
+            chips.textDirection = View.TEXT_DIRECTION_RTL
+        }
         suggestionStrip = chips
         outer.addView(chips, LinearLayout.LayoutParams(0, -1, 1f))
         outer.addView(voiceStripButton(), LinearLayout.LayoutParams(dp(if (isLandscape()) 34 else 40), -1))
@@ -865,7 +903,7 @@ class RetuiKeyboardService : InputMethodService() {
         bindImmediateKey(view, action = {
             when (chip.action) {
                 SuggestionAction.ADD_WORD -> {
-                    LocalDictionary.learnTypedWord(prefs, chip.word, force = true)
+                    activeLearnTypedWord(chip.word, force = true)
                     pendingAddWord = null
                     refreshSuggestionStripSoon()
                 }
@@ -878,27 +916,35 @@ class RetuiKeyboardService : InputMethodService() {
     private fun suggestionChips(): List<SuggestionChip> {
         val currentWord = currentWordBeforeCursor()
         val out = mutableListOf<SuggestionChip>()
-        val hasActiveWord = currentWord.any { LocalDictionary.isWordChar(it) }
-        val normalized = LocalDictionary.normalizeWord(currentWord)
+        val hasActiveWord = currentWord.any(::isWordChar)
+        val normalized = activeNormalizeWord(currentWord)
 
         if (hasActiveWord) {
             pendingAddWord = null
-            if (normalized != null && LocalDictionary.containsKnownWord(prefs, normalized)) {
+            if (normalized != null && activeContainsKnownWord(normalized)) {
                 val seen = HashSet<String>()
-                LocalDictionary.suggestCurrentWordAlternatives(prefs, currentWord, 3).forEach { suggestion ->
-                    val key = LocalDictionary.normalizeWord(suggestion) ?: suggestion.lowercase()
+                activeSuggestCurrentWordAlternatives(currentWord, 3).forEach { suggestion ->
+                    val key = activeNormalizeWord(suggestion) ?: suggestion.lowercase()
                     if (seen.add("current:$key")) {
                         out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
                     }
                 }
-                LocalDictionary.suggestNextWords(prefs, normalized, 2).forEach { suggestion ->
-                    val key = LocalDictionary.normalizeWord(suggestion) ?: suggestion.lowercase()
+                if (activeLanguagePack != null) {
+                    activeSuggest(currentWord, 4).forEach { suggestion ->
+                        val key = activeNormalizeWord(suggestion) ?: suggestion.lowercase()
+                        if (seen.add("current:$key")) {
+                            out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
+                        }
+                    }
+                }
+                activeSuggestNextWords(normalized, 2).forEach { suggestion ->
+                    val key = activeNormalizeWord(suggestion) ?: suggestion.lowercase()
                     if (seen.add("next:$key")) {
                         out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT_NEXT_WORD, 1f))
                     }
                 }
             } else {
-                val suggestions = LocalDictionary.suggest(prefs, currentWord, 5)
+                val suggestions = activeSuggest(currentWord, 5)
                 suggestions.forEach { suggestion ->
                     out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
                 }
@@ -907,17 +953,17 @@ class RetuiKeyboardService : InputMethodService() {
                     suggestions.isEmpty() &&
                     normalized != null &&
                     normalized.length >= ACTIVE_ADD_WORD_MIN_LENGTH &&
-                    !LocalDictionary.containsKnownWord(prefs, normalized)
+                    !activeContainsKnownWord(normalized)
                 ) {
                     out.add(SuggestionChip("+ ${currentWord.trim()}", normalized, SuggestionAction.ADD_WORD, 1.15f))
                 }
             }
         } else {
             val pending = pendingAddWord
-            if (pending != null && !LocalDictionary.containsKnownWord(prefs, pending)) {
-                out.add(SuggestionChip("+ ${LocalDictionary.displayWord(pending)}", pending, SuggestionAction.ADD_WORD, 1.15f))
+            if (pending != null && !activeContainsKnownWord(pending)) {
+                out.add(SuggestionChip("+ ${activeDisplayWord(pending)}", pending, SuggestionAction.ADD_WORD, 1.15f))
             } else {
-                LocalDictionary.suggestNextWords(prefs, previousWordBeforeCursor(), 5).forEach { suggestion ->
+                activeSuggestNextWords(previousWordBeforeCursor(), 5).forEach { suggestion ->
                     out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
                 }
             }
@@ -953,6 +999,12 @@ class RetuiKeyboardService : InputMethodService() {
             return
         }
 
+        val pack = activeLanguagePack
+        if (pack != null) {
+            addLanguagePackRows(parent, pack, keyHeight, bottomHeight, landscape)
+            return
+        }
+
         if (layout.showNumberRow) {
             addKeyRow(parent, numberRow(), if (landscape) 26 else 28)
         }
@@ -977,6 +1029,41 @@ class RetuiKeyboardService : InputMethodService() {
         }
         addKeyRow(parent, bottomRow(), bottomHeight)
     }
+
+    private fun addLanguagePackRows(
+        parent: LinearLayout,
+        pack: LanguagePack,
+        keyHeight: Int,
+        bottomHeight: Int,
+        landscape: Boolean
+    ) {
+        if (layout.showNumberRow) {
+            val digits = pack.digits.ifEmpty { listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0") }
+            addKeyRow(parent, digits.map { KeySpec(it, text = it) }, if (landscape) 26 else 28)
+        }
+        addKeyRow(parent, packKeyRow(pack.rows[0]), keyHeight)
+        addKeyRow(
+            parent,
+            mutableListOf(KeySpec("", 0.45f, Special.SPACER)).apply {
+                addAll(packKeyRow(pack.rows[1]))
+                add(KeySpec("", 0.45f, Special.SPACER))
+            },
+            keyHeight
+        )
+        val third = mutableListOf<KeySpec>()
+        pack.joiners.firstOrNull()?.let { joiner ->
+            third.add(KeySpec(pack.joinerLabel, 1.15f, text = joiner.toString(), specialStyle = true))
+        }
+        third.addAll(packKeyRow(pack.rows[2]))
+        third.add(KeySpec(ICON_BACKSPACE, 1.25f, Special.BACKSPACE))
+        addKeyRow(parent, third, keyHeight)
+        if (layout.showArrowRow) {
+            addKeyRow(parent, arrowRow(), if (landscape) 26 else 28)
+        }
+        addKeyRow(parent, bottomRow(), bottomHeight)
+    }
+
+    private fun packKeyRow(keys: List<String>): List<KeySpec> = keys.map { KeySpec(it, text = it) }
 
     private fun addSplitTextRows(parent: LinearLayout) {
         val keyHeight = 28
@@ -1084,12 +1171,12 @@ class RetuiKeyboardService : InputMethodService() {
         val right = mutableListOf<KeySpec>()
         if (layout.quickPeriod) right.add(periodKey(0.9f))
         right.add(enterKey(1.35f))
+        val left = mutableListOf(KeySpec(if (symbols) "ABC" else "123", 1.2f, Special.SYMBOLS))
+        languageSwitchKey()?.let(left::add)
+        left.add(commaKey(0.8f))
         addSplitKeyRow(
             parent = parent,
-            left = listOf(
-                KeySpec(if (symbols) "ABC" else "123", 1.2f, Special.SYMBOLS),
-                commaKey(0.8f)
-            ),
+            left = left,
             center = listOf(KeySpec("SPACE", 1f, Special.SPACE)),
             right = right,
             heightDp = heightDp,
@@ -1135,7 +1222,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun symbolRowTwo(): List<KeySpec> {
         return listOf(
             symbolKey("\\", "|"),
-            symbolKey("/", "?"),
+            symbolKey("/", activeLanguagePack?.questionMark ?: "?"),
             symbolKey("_", "-"),
             symbolKey("=", "+"),
             symbolKey("<", "["),
@@ -1154,7 +1241,7 @@ class RetuiKeyboardService : InputMethodService() {
             symbolKey("'", "\""),
             symbolKey(":", ";"),
             symbolKey("!", "¡"),
-            symbolKey("?", "¿"),
+            symbolKey(activeLanguagePack?.questionMark ?: "?", "¿"),
             KeySpec(ICON_DPAD, 2.2f, Special.DIRECTION_PAD, specialStyle = true),
             KeySpec(ICON_BACKSPACE, 1.25f, Special.BACKSPACE)
         )
@@ -1174,16 +1261,66 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun bottomRow(): List<KeySpec> {
-        val out = mutableListOf(
-            KeySpec(if (symbols) "ABC" else "123", 1.2f, Special.SYMBOLS),
-            commaKey(0.75f),
-            KeySpec("SPACE", if (layout.quickPeriod) 4.8f else 5.55f, Special.SPACE)
+        val hasLanguageSwitch = installedLanguagePacks.isNotEmpty()
+        val out = mutableListOf(KeySpec(if (symbols) "ABC" else "123", 1.2f, Special.SYMBOLS))
+        languageSwitchKey()?.let(out::add)
+        out.add(commaKey(0.75f))
+        out.add(
+            KeySpec(
+                activeLanguagePack?.spaceLabel ?: "SPACE",
+                if (hasLanguageSwitch) 4.1f else if (layout.quickPeriod) 4.8f else 5.55f,
+                Special.SPACE
+            )
         )
         if (layout.quickPeriod) {
             out.add(periodKey(0.75f))
         }
         out.add(enterKey(1.45f))
         return out
+    }
+
+    private fun languageSwitchKey(): KeySpec? {
+        if (installedLanguagePacks.isEmpty()) return null
+        val target = nextLanguagePack()
+        return KeySpec(target?.switchLabel ?: "EN", 1f, Special.LANGUAGE, specialStyle = true)
+    }
+
+    private fun nextLanguagePack(): LanguagePack? {
+        val languages = listOf<LanguagePack?>(null) + installedLanguagePacks
+        val currentId = activeLanguagePack?.id ?: LanguagePackManager.ENGLISH_ID
+        val currentIndex = languages.indexOfFirst {
+            (it?.id ?: LanguagePackManager.ENGLISH_ID) == currentId
+        }.coerceAtLeast(0)
+        return languages[(currentIndex + 1) % languages.size]
+    }
+
+    private fun switchLanguage() {
+        val target = nextLanguagePack()
+        LanguagePackManager.setActive(prefs, target?.id ?: LanguagePackManager.ENGLISH_ID)
+        activeLanguagePack = target
+        symbols = false
+        shifted = false
+        capsLocked = false
+        pendingAddWord = null
+        localWordBeforeCursor = ""
+        clearLatchedModifiers()
+        setInputView(buildKeyboardView())
+        refreshSuggestionStripSoon()
+    }
+
+    private fun reloadLanguagePacks(): Boolean {
+        val oldSignature = activeLanguagePack?.let { "${it.id}:${it.version}" } ?: LanguagePackManager.ENGLISH_ID
+        installedLanguagePacks = LanguagePackManager.installedPacks(this)
+        val requestedId = LanguagePackManager.activeId(prefs)
+        activeLanguagePack = if (requestedId == LanguagePackManager.ENGLISH_ID) {
+            null
+        } else {
+            installedLanguagePacks.firstOrNull { it.id == requestedId }.also { pack ->
+                if (pack == null) LanguagePackManager.setActive(prefs, LanguagePackManager.ENGLISH_ID)
+            }
+        }
+        val nextSignature = activeLanguagePack?.let { "${it.id}:${it.version}" } ?: LanguagePackManager.ENGLISH_ID
+        return oldSignature != nextSignature
     }
 
     private fun portraitBottomRow(): List<KeySpec> {
@@ -1327,11 +1464,13 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun commaKey(weight: Float = 1f): KeySpec {
-        return KeySpec(",", weight, text = ",", longLabel = ICON_SETTINGS, longSpecial = Special.SETTINGS)
+        val value = activeLanguagePack?.comma ?: ","
+        return KeySpec(value, weight, text = value, longLabel = ICON_SETTINGS, longSpecial = Special.SETTINGS)
     }
 
     private fun periodKey(weight: Float = 1f): KeySpec {
-        return KeySpec(".", weight, text = ".", longLabel = ICON_EMOJI, longSpecial = Special.EMOJI_PICKER)
+        val value = activeLanguagePack?.period ?: "."
+        return KeySpec(value, weight, text = value, longLabel = ICON_EMOJI, longSpecial = Special.EMOJI_PICKER)
     }
 
     private fun enterKey(weight: Float = 1f): KeySpec {
@@ -1454,6 +1593,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun canGlideFromKey(key: KeySpec): Boolean {
         val text = key.text ?: return false
         return layout.glideTyping &&
+            activeLanguagePack == null &&
             !isLandscape() &&
             !symbols &&
             !usesNumberPad() &&
@@ -2474,6 +2614,8 @@ class RetuiKeyboardService : InputMethodService() {
             symbols = symbols,
             emojiMode = emojiMode,
             clipboardMode = clipboardMode,
+            clipboardClearPending = clipboardClearPending,
+            languageId = activeLanguagePack?.id ?: LanguagePackManager.ENGLISH_ID,
             emojiCategoryIndex = emojiCategoryIndex
         )
     }
@@ -2591,11 +2733,16 @@ class RetuiKeyboardService : InputMethodService() {
     private fun keyStateBackground(fill: Int, stroke: Int, active: Boolean): Drawable {
         val normalFill = if (active) brightenColor(fill, 1.16f, 36) else fill
         val pressedFill = brightenColor(normalFill, 1.22f, 42)
-        frameRenderer.drawable(normalFill, pressedFill)?.let { return it }
-        return StateListDrawable().apply {
+        val fallback = StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_pressed), panel(pressedFill, stroke, 5))
             addState(intArrayOf(), panel(normalFill, stroke, 5))
         }
+        return frameRenderer.drawable(
+            RetuiVisualContract.FRAME_ROLE_KEYBOARD,
+            normalFill,
+            fallback,
+            pressedFill
+        )
     }
 
     private fun keyVisualInset(drawable: Drawable): Drawable {
@@ -2635,6 +2782,7 @@ class RetuiKeyboardService : InputMethodService() {
                 clearLatchedModifiers()
                 setInputView(buildKeyboardView())
             }
+            Special.LANGUAGE -> switchLanguage()
             Special.CTRL -> toggleModifier(Special.CTRL)
             Special.ALT -> toggleModifier(Special.ALT)
             Special.SUPER -> toggleModifier(Special.SUPER)
@@ -2702,6 +2850,7 @@ class RetuiKeyboardService : InputMethodService() {
         clearLatchedModifiers()
         emojiMode = false
         clipboardMode = true
+        clipboardClearPending = false
         captureClipboardIfEnabled()
         setInputView(buildKeyboardView())
     }
@@ -2709,6 +2858,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun closeClipboardMode() {
         if (!clipboardMode) return
         clipboardMode = false
+        clipboardClearPending = false
         setInputView(buildKeyboardView())
         refreshSuggestionStripSoon()
     }
@@ -2879,6 +3029,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun shouldApplyEnglishTypingAssist(): Boolean {
+        if (activeLanguagePack != null) return false
         if (!layout.doubleSpacePeriod) return false
         val info = currentInfo
         if (usesNumberPad(info)) return false
@@ -2955,6 +3106,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun applyActiveWordCasing(word: String): String {
+        if (activeLanguagePack != null) return word
         return when {
             capsLocked -> word.uppercase()
             shifted -> word.replaceFirstChar { char ->
@@ -2973,7 +3125,7 @@ class RetuiKeyboardService : InputMethodService() {
         ic.commitText(suggestionCommitText(applyActiveWordCasing(word), currentWord), 1)
         pendingAddWord = null
         localWordBeforeCursor = ""
-        LocalDictionary.recordAcceptedWord(prefs, word)
+        activeRecordAcceptedWord(word)
         if (shifted && !capsLocked) {
             shifted = false
             lastShiftTapAtMs = 0L
@@ -2984,13 +3136,13 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun commitNextWordAfterActive(word: String) {
-        val normalized = LocalDictionary.normalizeWord(word) ?: return
+        val normalized = activeNormalizeWord(word) ?: return
         val ic = currentInputConnection ?: return
         learnFinishedWord(currentWordBeforeCursor())
-        ic.commitText(" ${LocalDictionary.displayWord(normalized)} ", 1)
+        ic.commitText(" ${activeDisplayWord(normalized)} ", 1)
         pendingAddWord = null
         localWordBeforeCursor = ""
-        LocalDictionary.recordAcceptedWord(prefs, normalized)
+        activeRecordAcceptedWord(normalized)
         if (shifted && !capsLocked) {
             shifted = false
             lastShiftTapAtMs = 0L
@@ -3234,11 +3386,11 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun learnFinishedWord(word: String?) {
         if (word.isNullOrBlank()) return
-        val normalized = LocalDictionary.normalizeWord(word) ?: return
-        if (LocalDictionary.containsKnownWord(prefs, normalized)) {
+        val normalized = activeNormalizeWord(word) ?: return
+        if (activeContainsKnownWord(normalized)) {
             pendingAddWord = null
             if (layout.learnLocalWords) {
-                LocalDictionary.learnTypedWord(prefs, normalized, force = false)
+                activeLearnTypedWord(normalized, force = false)
             }
             return
         }
@@ -3339,7 +3491,69 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun isWordChar(char: Char): Boolean {
-        return LocalDictionary.isWordChar(char)
+        return activeLanguagePack?.isWordChar(char) ?: LocalDictionary.isWordChar(char)
+    }
+
+    private fun activeNormalizeWord(word: String): String? {
+        val pack = activeLanguagePack
+        return if (pack == null) LocalDictionary.normalizeWord(word) else pack.normalizeWord(word)
+    }
+
+    private fun activeContainsKnownWord(word: String): Boolean {
+        val pack = activeLanguagePack
+        return if (pack == null) {
+            LocalDictionary.containsKnownWord(prefs, word)
+        } else {
+            LanguagePackDictionary.containsKnownWord(pack, prefs, word)
+        }
+    }
+
+    private fun activeSuggest(prefix: String, limit: Int): List<String> {
+        val pack = activeLanguagePack
+        return if (pack == null) {
+            LocalDictionary.suggest(prefs, prefix, limit)
+        } else {
+            LanguagePackDictionary.suggest(pack, prefs, prefix, limit)
+        }
+    }
+
+    private fun activeSuggestCurrentWordAlternatives(word: String, limit: Int): List<String> {
+        val pack = activeLanguagePack
+        return if (pack == null) {
+            LocalDictionary.suggestCurrentWordAlternatives(prefs, word, limit)
+        } else {
+            LanguagePackDictionary.suggestCurrentWordAlternatives(pack, prefs, word, limit)
+        }
+    }
+
+    private fun activeSuggestNextWords(previousWord: String?, limit: Int): List<String> {
+        return if (activeLanguagePack == null) {
+            LocalDictionary.suggestNextWords(prefs, previousWord, limit)
+        } else {
+            emptyList()
+        }
+    }
+
+    private fun activeLearnTypedWord(word: String, force: Boolean): Boolean {
+        val pack = activeLanguagePack
+        return if (pack == null) {
+            LocalDictionary.learnTypedWord(prefs, word, force)
+        } else {
+            LanguagePackDictionary.learnTypedWord(pack, prefs, word, force)
+        }
+    }
+
+    private fun activeRecordAcceptedWord(word: String) {
+        val pack = activeLanguagePack
+        if (pack == null) {
+            LocalDictionary.recordAcceptedWord(prefs, word)
+        } else {
+            LanguagePackDictionary.recordAcceptedWord(pack, prefs, word)
+        }
+    }
+
+    private fun activeDisplayWord(word: String): String {
+        return activeLanguagePack?.normalizeWord(word) ?: LocalDictionary.displayWord(word)
     }
 
     private fun applyEditorInfo(info: EditorInfo?) {
@@ -3353,6 +3567,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun resetTransientLayoutState() {
         emojiMode = false
         clipboardMode = false
+        clipboardClearPending = false
         emojiCategoryIndex = 0
         symbols = false
         shifted = false
@@ -3819,6 +4034,8 @@ class RetuiKeyboardService : InputMethodService() {
         val symbols: Boolean,
         val emojiMode: Boolean,
         val clipboardMode: Boolean,
+        val clipboardClearPending: Boolean,
+        val languageId: String,
         val emojiCategoryIndex: Int
     )
 
@@ -3853,6 +4070,7 @@ class RetuiKeyboardService : InputMethodService() {
         SHIFT,
         SPACE,
         SYMBOLS,
+        LANGUAGE,
         CTRL,
         ALT,
         SUPER,

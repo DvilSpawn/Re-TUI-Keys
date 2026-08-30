@@ -21,6 +21,7 @@ object KeyboardProfileBackup {
         KeyboardPrefs.KEY_DOUBLE_SPACE_PERIOD,
         KeyboardPrefs.KEY_LEARN_LOCAL_WORDS,
         KeyboardPrefs.KEY_LOCAL_SUGGESTIONS,
+        LanguagePackManager.KEY_ACTIVE_LANGUAGE,
         KeyboardPrefs.KEY_PORTRAIT_HEIGHT_PERCENT,
         KeyboardPrefs.KEY_QUICK_PERIOD,
         KeyboardPrefs.KEY_SHOW_ARROW_ROW,

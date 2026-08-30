@@ -36,6 +36,7 @@
     <string name="setting_sound_on_keypress_summary">Plays the system key click sound.</string>
     <string name="setting_local_suggestions">Local suggestions</string>
     <string name="setting_local_suggestions_summary">Shows offline word suggestions from this device only.</string>
+    <string name="setting_import_language_pack">Import language pack</string>
     <string name="setting_clipboard_auto_save">Auto-save clipboard</string>
     <string name="setting_clipboard_auto_save_summary">Saves copied text locally while the keyboard is active.</string>
     <string name="setting_clipboard_retention_days">Clipboard clear after</string>

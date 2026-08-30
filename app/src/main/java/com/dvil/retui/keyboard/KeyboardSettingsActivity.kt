@@ -20,8 +20,11 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.ClipDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
+import android.graphics.drawable.StateListDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -63,6 +66,7 @@ import kotlin.math.roundToInt
 
 class KeyboardSettingsActivity : ComponentActivity() {
     private lateinit var prefs: SharedPreferences
+    private lateinit var frameRenderer: LauncherFrameRenderer
     private lateinit var list: LinearLayout
     private lateinit var sectionHost: LinearLayout
     private lateinit var settingsFrame: FrameLayout
@@ -70,6 +74,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
     private lateinit var previewInput: EditText
     private lateinit var backgroundPicker: ActivityResultLauncher<Intent>
     private lateinit var fontPicker: ActivityResultLauncher<Intent>
+    private lateinit var languagePackPicker: ActivityResultLauncher<Intent>
     private lateinit var profileBackupPicker: ActivityResultLauncher<Intent>
     private lateinit var profileRestorePicker: ActivityResultLauncher<Intent>
     private var theme = SettingsTheme()
@@ -84,11 +89,18 @@ class KeyboardSettingsActivity : ComponentActivity() {
     private var cachedSettingsFontUri: String? = null
     private var cachedSettingsTypeface: Typeface? = null
     private val expandedSections = mutableSetOf<String>()
+    private val framePrefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == LauncherFrameRenderer.KEY_REVISION || key == KeyboardPrefs.KEY_ACCEPT_LAUNCHER_FRAMES) {
+            if (key == KeyboardPrefs.KEY_ACCEPT_LAUNCHER_FRAMES) frameRenderer.reload()
+            window.decorView.invalidate()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         registerActivityResultLaunchers()
         prefs = getSharedPreferences(KeyboardPrefs.PREFS_NAME, MODE_PRIVATE)
+        frameRenderer = LauncherFrameRenderer.shared(this, prefs)
         KeyboardPrefs.migrateLayout(prefs)
         theme = loadSettingsTheme(intent)
         themeDraft = theme
@@ -143,6 +155,16 @@ class KeyboardSettingsActivity : ComponentActivity() {
         showPreviewKeyboard()
     }
 
+    override fun onStart() {
+        super.onStart()
+        prefs.registerOnSharedPreferenceChangeListener(framePrefsListener)
+    }
+
+    override fun onStop() {
+        prefs.unregisterOnSharedPreferenceChangeListener(framePrefsListener)
+        super.onStop()
+    }
+
     override fun onPause() {
         cancelPreviewCallbacks()
         super.onPause()
@@ -159,6 +181,10 @@ class KeyboardSettingsActivity : ComponentActivity() {
         }
         fontPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == RESULT_OK) handleFontResult(result.data)
+        }
+        languagePackPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val uri = result.data?.data
+            if (result.resultCode == RESULT_OK && uri != null) importLanguagePack(uri)
         }
         profileBackupPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val uri = result.data?.data
@@ -252,7 +278,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = theme.border,
             strokeDp = 1.5f,
             radiusDp = theme.outputCornerRadiusDp,
-            notch = true
+            notch = true,
+            role = RetuiVisualContract.FRAME_ROLE_SETTINGS
         )
         val borderParams = FrameLayout.LayoutParams(-1, -1)
         borderParams.topMargin = dp(18)
@@ -271,7 +298,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         window.addView(title, titleParams)
         title.bringToFront()
 
-        val close = terminalTab("X", minWidthDp = 48)
+        val close = terminalIconButton("X", minWidthDp = 48)
         val closeParams = FrameLayout.LayoutParams(dp(48), dp(36), Gravity.TOP or Gravity.END)
         closeParams.topMargin = dp(8)
         window.addView(close, closeParams)
@@ -288,7 +315,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = withAlpha(theme.outputBorder, 210),
             strokeDp = 1.2f,
             radiusDp = theme.outputCornerRadiusDp,
-            notch = true
+            notch = true,
+            role = RetuiVisualContract.FRAME_ROLE_SETTINGS
         )
         windowContent.addView(outputFrame, LinearLayout.LayoutParams(-1, 0, 1f))
 
@@ -460,6 +488,9 @@ class KeyboardSettingsActivity : ComponentActivity() {
             defaultValue = KeyboardPrefs.DEFAULT_LEARN_LOCAL_WORDS
         )
 
+        addSectionLabel(list, "LANGUAGE PACKS")
+        addLanguagePackControls(list)
+
         addSectionLabel(list, "CLIPBOARD")
         addTerminalToggle(
             parent = list,
@@ -630,19 +661,28 @@ class KeyboardSettingsActivity : ComponentActivity() {
         section.isClickable = true
         section.isFocusable = true
         section.contentDescription = "Expand $label settings"
-        section.background = panelDrawable(
-            fill = theme.rowBg,
-            stroke = withAlpha(theme.border, 170),
-            strokeDp = 1f,
-            radiusDp = theme.moduleCornerRadiusDp,
-            notch = false
-        )
+        fun renderSection(expanded: Boolean) {
+            section.background = panelDrawable(
+                fill = theme.rowBg,
+                stroke = withAlpha(theme.border, if (expanded) 255 else 170),
+                strokeDp = if (expanded) 1.5f else 1f,
+                radiusDp = theme.moduleCornerRadiusDp,
+                notch = false,
+                role = if (expanded) {
+                    RetuiVisualContract.FRAME_ROLE_LIST_ITEM_SELECTED
+                } else {
+                    RetuiVisualContract.FRAME_ROLE_LIST_ITEM
+                }
+            )
+        }
+        renderSection(body.visibility == View.VISIBLE)
         section.setOnClickListener {
             val expanded = body.visibility != View.VISIBLE
             body.visibility = if (expanded) View.VISIBLE else View.GONE
             if (expanded) expandedSections.add(sectionKey) else expandedSections.remove(sectionKey)
             section.text = "${if (expanded) "▼" else "▶"} $sectionKey"
             section.contentDescription = "${if (expanded) "Collapse" else "Expand"} $label settings"
+            renderSection(expanded)
         }
         val params = LinearLayout.LayoutParams(-1, dp(34))
         params.setMargins(0, dp(4), 0, dp(2))
@@ -673,7 +713,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = withAlpha(theme.border, 170),
             strokeDp = 1f,
             radiusDp = theme.moduleCornerRadiusDp,
-            notch = false
+            notch = false,
+            role = RetuiVisualContract.FRAME_ROLE_LIST_ITEM
         )
         val rowParams = LinearLayout.LayoutParams(-1, -2)
         rowParams.setMargins(0, 0, 0, dp(7))
@@ -704,13 +745,19 @@ class KeyboardSettingsActivity : ComponentActivity() {
         fun render(next: Boolean) {
             enabled = next
             toggle.text = if (enabled) "ON" else "OFF"
-            toggle.setTextColor(if (enabled) theme.bg else theme.dim)
+            toggle.setTextColor(if (enabled) withAlpha(theme.bg, 255) else theme.dim)
             toggle.background = panelDrawable(
                 fill = if (enabled) theme.accent else theme.inputBg,
                 stroke = if (enabled) theme.accent else withAlpha(theme.inputBorder, 160),
                 strokeDp = 1f,
                 radiusDp = theme.headerCornerRadiusDp.coerceAtLeast(theme.moduleCornerRadiusDp),
-                notch = false
+                notch = false,
+                frameFill = Color.TRANSPARENT,
+                role = if (enabled) {
+                    RetuiVisualContract.FRAME_ROLE_TOGGLE_ON
+                } else {
+                    RetuiVisualContract.FRAME_ROLE_TOGGLE_OFF
+                }
             )
         }
 
@@ -752,7 +799,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = withAlpha(theme.border, 170),
             strokeDp = 1f,
             radiusDp = theme.moduleCornerRadiusDp,
-            notch = false
+            notch = false,
+            role = RetuiVisualContract.FRAME_ROLE_LIST_ITEM
         )
         val rowParams = LinearLayout.LayoutParams(-1, -2)
         rowParams.setMargins(0, 0, 0, dp(7))
@@ -888,7 +936,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = withAlpha(theme.border, 170),
             strokeDp = 1f,
             radiusDp = theme.moduleCornerRadiusDp,
-            notch = false
+            notch = false,
+            role = RetuiVisualContract.FRAME_ROLE_LIST_ITEM
         )
         val rowParams = LinearLayout.LayoutParams(-1, -2)
         rowParams.setMargins(0, 0, 0, dp(7))
@@ -978,6 +1027,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
             val slider = SeekBar(this)
             slider.max = 255
             slider.progress = colorChannel(value, channel)
+            styleSlider(slider)
             slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                     if (fromUser) render(replaceColorChannel(value, channel, progress), syncField = true)
@@ -1028,7 +1078,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = withAlpha(theme.inputBorder, 160),
             strokeDp = 1f,
             radiusDp = theme.moduleCornerRadiusDp,
-            notch = false
+            notch = false,
+            role = RetuiVisualContract.FRAME_ROLE_UI_INPUT
         )
         input.setText(colorHex(value))
         return input
@@ -1114,7 +1165,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = withAlpha(theme.border, 170),
             strokeDp = 1f,
             radiusDp = theme.moduleCornerRadiusDp,
-            notch = false
+            notch = false,
+            role = RetuiVisualContract.FRAME_ROLE_LIST_ITEM
         )
         val rowParams = LinearLayout.LayoutParams(-1, dp(52))
         rowParams.setMargins(0, 0, 0, dp(7))
@@ -1198,28 +1250,92 @@ class KeyboardSettingsActivity : ComponentActivity() {
         button.isFocusable = true
         button.minHeight = dp(42)
         button.setPadding(dp(10), 0, dp(10), 0)
-        button.background = panelDrawable(
-            fill = theme.actionBg,
-            stroke = theme.border,
-            strokeDp = 1.1f,
-            radiusDp = theme.moduleCornerRadiusDp,
-            notch = false
-        )
+        button.background = buttonDrawable(primary = false)
         button.setOnClickListener { action() }
         val params = LinearLayout.LayoutParams(-1, dp(44))
         params.setMargins(0, dp(5), 0, dp(3))
         parent.addView(button, params)
     }
 
+    private fun addLanguagePackControls(parent: LinearLayout) {
+        val packs = LanguagePackManager.installedPacks(this)
+        val activeId = LanguagePackManager.activeId(prefs)
+        val activeName = packs.firstOrNull { it.id == activeId }?.nativeName ?: "English"
+        val status = terminalLabel("ACTIVE: $activeName", TEXT_MEDIUM_SP, bold = true)
+        status.setTextColor(theme.accent)
+        status.gravity = Gravity.CENTER
+        parent.addView(status, LinearLayout.LayoutParams(-1, dp(38)))
+
+        if (activeId != LanguagePackManager.ENGLISH_ID) {
+            addCommandButton(parent, "Use English") {
+                LanguagePackManager.setActive(prefs, LanguagePackManager.ENGLISH_ID)
+                rebuildRows()
+                refreshKeyboard()
+            }
+        }
+        packs.forEach { pack ->
+            if (pack.id != activeId) {
+                addCommandButton(parent, "Use ${pack.nativeName} (${pack.languageTag})") {
+                    LanguagePackManager.setActive(prefs, pack.id)
+                    rebuildRows()
+                    refreshKeyboard()
+                }
+            }
+        }
+        addCommandButton(parent, getString(R.string.setting_import_language_pack)) {
+            languagePackPicker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/zip", "application/octet-stream", "*/*"))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            })
+        }
+    }
+
+    private fun importLanguagePack(uri: Uri) {
+        val result = try {
+            contentResolver.openInputStream(uri)?.use { input ->
+                LanguagePackManager.install(this, input)
+            }
+        } catch (_: Exception) {
+            null
+        }
+        val pack = result?.pack
+        if (pack == null) {
+            toast(result?.error?.uppercase(Locale.US) ?: "LANGUAGE PACK IMPORT FAILED")
+            return
+        }
+        LanguagePackManager.setActive(prefs, pack.id)
+        expandedSections.add("LANGUAGE PACKS")
+        toast("INSTALLED ${pack.nativeName}")
+        rebuildRows()
+        refreshKeyboard()
+    }
+
     private fun showGlideTypingWarning(onAccepted: () -> Unit) {
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle(R.string.setting_glide_typing_warning_title)
             .setMessage(R.string.setting_glide_typing_warning_message)
             .setNegativeButton(android.R.string.cancel, null)
             .setPositiveButton(R.string.setting_glide_typing_warning_enable) { _, _ ->
                 onAccepted()
             }
-            .show()
+            .create()
+        dialog.setOnShowListener {
+            dialog.window?.setBackgroundDrawable(
+                panelDrawable(
+                    fill = theme.panelBg,
+                    stroke = theme.border,
+                    strokeDp = 1.5f,
+                    radiusDp = theme.outputCornerRadiusDp,
+                    notch = false,
+                    role = RetuiVisualContract.FRAME_ROLE_DIALOG
+                )
+            )
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.background = buttonDrawable(primary = true)
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.background = buttonDrawable(primary = false)
+        }
+        dialog.show()
     }
 
     private fun showGlideTrainingSurface() {
@@ -1263,7 +1379,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = theme.border,
             strokeDp = 1.2f,
             radiusDp = theme.outputCornerRadiusDp,
-            notch = true
+            notch = true,
+            role = RetuiVisualContract.FRAME_ROLE_LIST_ITEM_SELECTED
         )
         root.addView(prompt, LinearLayout.LayoutParams(-1, dp(92)))
 
@@ -1281,7 +1398,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = withAlpha(theme.inputBorder, 190),
             strokeDp = 1.1f,
             radiusDp = theme.outputCornerRadiusDp,
-            notch = false
+            notch = false,
+            role = RetuiVisualContract.FRAME_ROLE_UI_INPUT
         )
         val inputParams = LinearLayout.LayoutParams(-1, dp(56))
         inputParams.setMargins(0, dp(12), 0, dp(10))
@@ -1379,13 +1497,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         button.setTextColor(theme.text)
         button.isClickable = true
         button.isFocusable = true
-        button.background = panelDrawable(
-            fill = theme.actionBg,
-            stroke = theme.border,
-            strokeDp = 1f,
-            radiusDp = theme.moduleCornerRadiusDp,
-            notch = false
-        )
+        button.background = buttonDrawable(primary = false)
         button.setOnClickListener { action() }
         val params = LinearLayout.LayoutParams(0, dp(42), 1f)
         params.setMargins(dp(3), 0, dp(3), 0)
@@ -1613,7 +1725,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = withAlpha(theme.inputBorder, 180),
             strokeDp = 1.2f,
             radiusDp = theme.outputCornerRadiusDp,
-            notch = false
+            notch = false,
+            role = RetuiVisualContract.FRAME_ROLE_SETTINGS
         )
         previewDock.addView(previewFrame, LinearLayout.LayoutParams(-1, dp(52)))
 
@@ -1686,6 +1799,19 @@ class KeyboardSettingsActivity : ComponentActivity() {
         return view
     }
 
+    private fun terminalIconButton(text: String, minWidthDp: Int): TextView {
+        val view = terminalTab(text, minWidthDp)
+        view.background = panelDrawable(
+            fill = theme.headerBg,
+            stroke = theme.headerTabBorder,
+            strokeDp = 1.2f,
+            radiusDp = theme.headerCornerRadiusDp,
+            notch = false,
+            role = RetuiVisualContract.FRAME_ROLE_ICON_BUTTON
+        )
+        return view
+    }
+
     private fun terminalValueInput(value: Int): EditText {
         val input = EditText(this)
         input.typeface = settingsTypeface()
@@ -1703,7 +1829,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = withAlpha(theme.inputBorder, 160),
             strokeDp = 1f,
             radiusDp = theme.moduleCornerRadiusDp,
-            notch = false
+            notch = false,
+            role = RetuiVisualContract.FRAME_ROLE_UI_INPUT
         )
         input.setText(value.toString())
         return input
@@ -1725,7 +1852,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = withAlpha(theme.inputBorder, 160),
             strokeDp = 1f,
             radiusDp = theme.moduleCornerRadiusDp,
-            notch = false
+            notch = false,
+            role = RetuiVisualContract.FRAME_ROLE_UI_INPUT
         )
         return input
     }
@@ -1749,7 +1877,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = withAlpha(theme.inputBorder, 160),
             strokeDp = 1f,
             radiusDp = theme.moduleCornerRadiusDp,
-            notch = false
+            notch = false,
+            role = RetuiVisualContract.FRAME_ROLE_UI_INPUT
         )
         return input
     }
@@ -1759,13 +1888,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         button.gravity = Gravity.CENTER
         button.isClickable = true
         button.isFocusable = true
-        button.background = panelDrawable(
-            fill = theme.actionBg,
-            stroke = theme.border,
-            strokeDp = 1f,
-            radiusDp = theme.moduleCornerRadiusDp,
-            notch = false
-        )
+        button.background = buttonDrawable(primary = text in PRIMARY_ACTIONS)
         return button
     }
 
@@ -1779,7 +1902,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = theme.border,
             strokeDp = 1f,
             radiusDp = theme.headerCornerRadiusDp,
-            notch = false
+            notch = false,
+            role = RetuiVisualContract.FRAME_ROLE_ICON_BUTTON
         )
         return button
     }
@@ -1880,7 +2004,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             stroke = withAlpha(theme.inputBorder, 140),
             strokeDp = 1f,
             radiusDp = theme.moduleCornerRadiusDp,
-            notch = false
+            notch = false,
+            role = RetuiVisualContract.FRAME_ROLE_SLIDER_TRACK
         )
         return bar
     }
@@ -2039,12 +2164,75 @@ class KeyboardSettingsActivity : ComponentActivity() {
         }
     }
 
+    private fun buttonDrawable(primary: Boolean): Drawable {
+        val normalFill = if (primary) blendColor(theme.actionBg, theme.accent, 0.12f) else theme.actionBg
+        val pressedFill = blendColor(normalFill, Color.WHITE, 0.14f)
+        val normal = panelDrawable(
+            fill = normalFill,
+            stroke = if (primary) theme.accent else theme.border,
+            strokeDp = if (primary) 1.5f else 1f,
+            radiusDp = theme.moduleCornerRadiusDp,
+            notch = false,
+            role = if (primary) RetuiVisualContract.FRAME_ROLE_BUTTON_PRIMARY else RetuiVisualContract.FRAME_ROLE_BUTTON
+        )
+        val pressed = panelDrawable(
+            fill = pressedFill,
+            stroke = theme.accent,
+            strokeDp = 1.5f,
+            radiusDp = theme.moduleCornerRadiusDp,
+            notch = false,
+            role = RetuiVisualContract.FRAME_ROLE_BUTTON_PRESSED
+        )
+        return StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_pressed), pressed)
+            addState(intArrayOf(), normal)
+        }
+    }
+
+    private fun styleSlider(view: SeekBar) {
+        val layers = view.progressDrawable?.mutate() as? LayerDrawable
+        if (layers != null) {
+            val trackFallback = layers.findDrawableByLayerId(android.R.id.background)
+            val progressFallback = layers.findDrawableByLayerId(android.R.id.progress)
+            layers.setDrawableByLayerId(
+                android.R.id.background,
+                frameRenderer.drawable(
+                    RetuiVisualContract.FRAME_ROLE_SLIDER_TRACK,
+                    withAlpha(theme.inputBg, 180),
+                    trackFallback
+                )
+            )
+            layers.setDrawableByLayerId(
+                android.R.id.progress,
+                ClipDrawable(
+                    frameRenderer.drawable(
+                        RetuiVisualContract.FRAME_ROLE_SLIDER_PROGRESS,
+                        theme.accent,
+                        progressFallback
+                    ),
+                    Gravity.START,
+                    ClipDrawable.HORIZONTAL
+                )
+            )
+            view.progressDrawable = layers
+        }
+        view.thumb = frameRenderer.drawable(
+            RetuiVisualContract.FRAME_ROLE_SLIDER_THUMB,
+            theme.accent,
+            view.thumb,
+            intrinsicDp = 24f
+        )
+        view.splitTrack = false
+    }
+
     private fun panelDrawable(
         fill: Int,
         stroke: Int,
         strokeDp: Float,
         notch: Boolean,
-        radiusDp: Int = theme.moduleCornerRadiusDp
+        radiusDp: Int = theme.moduleCornerRadiusDp,
+        frameFill: Int = fill,
+        role: String = RetuiVisualContract.FRAME_ROLE_SETTINGS
     ): Drawable {
         val strokeWidthPx = when {
             theme.cyberdeckMode -> max(1, dpFloat(strokeDp).roundToInt())
@@ -2055,7 +2243,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
             )
             else -> 0
         }
-        return KeyboardTerminalBorderDrawable(
+        val fallback = KeyboardTerminalBorderDrawable(
             fillColor = fill,
             borderColor = stroke,
             strokeWidthPx = strokeWidthPx,
@@ -2066,11 +2254,12 @@ class KeyboardSettingsActivity : ComponentActivity() {
             cyberdeck = theme.cyberdeckMode,
             cyberdeckNotch = notch
         )
+        return frameRenderer.drawable(role, frameFill, fallback)
     }
 
     private fun tabDrawable(fill: Int): Drawable {
-        if (theme.cyberdeckMode) {
-            return KeyboardTerminalBorderDrawable(
+        val fallback = if (theme.cyberdeckMode) {
+            KeyboardTerminalBorderDrawable(
                 fillColor = fill,
                 borderColor = theme.headerTabBorder,
                 strokeWidthPx = max(1, dpFloat(1.2f).roundToInt()),
@@ -2081,8 +2270,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
                 cyberdeck = true,
                 cyberdeckNotch = true
             )
-        }
-        return GradientDrawable().apply {
+        } else GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             setColor(fill)
             cornerRadius = dpFloat(theme.headerCornerRadiusDp.coerceIn(0, 48).toFloat())
@@ -2099,11 +2287,17 @@ class KeyboardSettingsActivity : ComponentActivity() {
                 setStroke(0, Color.TRANSPARENT)
             }
         }
+        return frameRenderer.drawable(RetuiVisualContract.FRAME_ROLE_HEADER, fill, fallback)
     }
 
     private fun bindPanelCutouts(panel: View?, vararg cutoutViews: View?) {
         val border = panel ?: return
-        val drawable = border.background as? KeyboardTerminalBorderDrawable ?: return
+        val background = border.background
+        val drawable = when (background) {
+            is KeyboardTerminalBorderDrawable -> background
+            is LauncherFrameRenderer.RoleFrameDrawable -> background.fallback as? KeyboardTerminalBorderDrawable
+            else -> null
+        } ?: return
         val views = cutoutViews.filterNotNull()
         if (views.isEmpty()) {
             drawable.setCutouts(emptyList(), emptyList())
@@ -2845,6 +3039,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         private const val TEXT_SMALL_SP = 11f
         private const val TEXT_MEDIUM_SP = 12f
         private const val TEXT_LARGE_SP = 15f
+        private val PRIMARY_ACTIONS = setOf("APPLY", "SAVE", "DONE", "CONFIRM", "COMMIT")
 
         private val SURFACE_BG = Color.rgb(2, 6, 4)
         private val PANEL_BG = Color.rgb(13, 23, 20)
