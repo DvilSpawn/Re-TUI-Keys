@@ -150,6 +150,14 @@ internal object LanguagePackManager {
         }
     }
 
+    fun delete(context: Context, prefs: SharedPreferences, id: String): Boolean {
+        if (id == ENGLISH_ID || !PACK_ID.matches(id)) return false
+        val file = java.io.File(packDirectory(context), id + EXTENSION)
+        if (!file.isFile || !file.delete()) return false
+        setActive(prefs, ENGLISH_ID)
+        return true
+    }
+
     private fun load(context: Context, id: String): LanguagePack? {
         if (!PACK_ID.matches(id)) return null
         val file = java.io.File(packDirectory(context), id + EXTENSION)

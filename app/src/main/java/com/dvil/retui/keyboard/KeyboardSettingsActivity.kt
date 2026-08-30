@@ -1239,6 +1239,14 @@ class KeyboardSettingsActivity : ComponentActivity() {
     }
 
     private fun addCommandButton(parent: LinearLayout, label: String, action: () -> Unit) {
+        val button = commandButton(label)
+        button.setOnClickListener { action() }
+        val params = LinearLayout.LayoutParams(-1, dp(44))
+        params.setMargins(0, dp(5), 0, dp(3))
+        parent.addView(button, params)
+    }
+
+    private fun commandButton(label: String): TextView {
         val button = TextView(this)
         button.text = label.uppercase(Locale.US)
         button.typeface = settingsTypeface()
@@ -1251,10 +1259,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         button.minHeight = dp(42)
         button.setPadding(dp(10), 0, dp(10), 0)
         button.background = buttonDrawable(primary = false)
-        button.setOnClickListener { action() }
-        val params = LinearLayout.LayoutParams(-1, dp(44))
-        params.setMargins(0, dp(5), 0, dp(3))
-        parent.addView(button, params)
+        return button
     }
 
     private fun addLanguagePackControls(parent: LinearLayout) {
@@ -1274,12 +1279,50 @@ class KeyboardSettingsActivity : ComponentActivity() {
             }
         }
         packs.forEach { pack ->
-            if (pack.id != activeId) {
-                addCommandButton(parent, "Use ${pack.nativeName} (${pack.languageTag})") {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val use = commandButton(
+                if (pack.id == activeId) "Using ${pack.nativeName} (${pack.languageTag})"
+                else "Use ${pack.nativeName} (${pack.languageTag})"
+            )
+            use.isEnabled = pack.id != activeId
+            use.alpha = if (use.isEnabled) 1f else 0.7f
+            use.setOnClickListener {
+                if (pack.id != activeId) {
                     LanguagePackManager.setActive(prefs, pack.id)
                     rebuildRows()
                     refreshKeyboard()
                 }
+            }
+            row.addView(use, LinearLayout.LayoutParams(0, dp(44), 1f))
+
+            val delete = commandButton("DEL")
+            delete.contentDescription = "Delete ${pack.name} language pack"
+            delete.setOnClickListener {
+                if (LanguagePackManager.delete(this, prefs, pack.id)) {
+                    expandedSections.add("LANGUAGE PACKS")
+                    toast("DELETED ${pack.nativeName}; USING ENGLISH")
+                    rebuildRows()
+                    refreshKeyboard()
+                } else {
+                    toast("FAILED TO DELETE ${pack.nativeName}")
+                }
+            }
+            val deleteParams = LinearLayout.LayoutParams(dp(64), dp(44))
+            deleteParams.leftMargin = dp(6)
+            row.addView(delete, deleteParams)
+
+            val rowParams = LinearLayout.LayoutParams(-1, dp(44))
+            rowParams.setMargins(0, dp(5), 0, dp(3))
+            parent.addView(row, rowParams)
+        }
+        addCommandButton(parent, getString(R.string.setting_browse_language_packs)) {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(LANGUAGE_PACKS_URL)))
+            } catch (_: Exception) {
+                toast("NO BROWSER AVAILABLE")
             }
         }
         addCommandButton(parent, getString(R.string.setting_import_language_pack)) {
@@ -3039,6 +3082,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         private const val TEXT_SMALL_SP = 11f
         private const val TEXT_MEDIUM_SP = 12f
         private const val TEXT_LARGE_SP = 15f
+        private const val LANGUAGE_PACKS_URL = "https://github.com/DvilSpawn/Re-TUI-Keys/blob/main/LANGUAGE_PACKS.md"
         private val PRIMARY_ACTIONS = setOf("APPLY", "SAVE", "DONE", "CONFIRM", "COMMIT")
 
         private val SURFACE_BG = Color.rgb(2, 6, 4)

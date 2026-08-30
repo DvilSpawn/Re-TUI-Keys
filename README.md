@@ -93,6 +93,10 @@ English ships with the app. Additional languages are `.retui-lang` ZIP files
 containing `manifest.json`, `words.tsv`, and an optional `LICENSE` or `NOTICE`.
 Users install a downloaded pack from `LANGUAGE PACKS` in Settings; the app
 validates it, stores it privately, and exposes it through the language key.
+The in-app **Browse language packs** action opens the
+[Language Packs page](https://github.com/DvilSpawn/Re-TUI-Keys/blob/main/LANGUAGE_PACKS.md),
+where every language links to its own GitHub Release. Deleting an installed
+pack switches the keyboard back to English.
 
 The first pack is Persian (`fa-IR`) at
 `language-packs/dist/persian-fa-IR-v1.retui-lang`. It includes an RTL Persian
