@@ -54,6 +54,7 @@ import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import android.widget.FrameLayout
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
 import android.widget.ScrollView
@@ -117,6 +118,7 @@ class RetuiKeyboardService : InputMethodService() {
     private var cachedFontUri: String? = null
     private var cachedTypeface: Typeface? = null
     private var activeKeyPreview: PopupWindow? = null
+    private var launcherShortcuts: LauncherShortcutContract.State? = null
     private val repeatHandler = Handler(Looper.getMainLooper())
     private var repeatRunnable: Runnable? = null
     private var suggestionRefreshPosted = false
@@ -180,6 +182,7 @@ class RetuiKeyboardService : InputMethodService() {
         prefs = getSharedPreferences(KeyboardPrefs.PREFS_NAME, MODE_PRIVATE)
         KeyboardPrefs.migrateLayout(prefs)
         frameRenderer = LauncherFrameRenderer.shared(this, prefs)
+        launcherShortcuts = LauncherShortcutContract.read(prefs)
         LocalDictionary.preload(applicationContext)
         reloadLanguagePacks()
         loadPersistedTheme()
@@ -1545,11 +1548,13 @@ class RetuiKeyboardService : InputMethodService() {
         if (key.special == Special.DIRECTION_PAD) {
             return directionPadKey(key)
         }
+        val shortcutActions = launcherShortcuts?.forKey(key.text).orEmpty()
         if (
             key.longText == null &&
             key.longKeyCode == null &&
             key.longSpecial == null &&
             key.accentVariants.isEmpty() &&
+            shortcutActions.isEmpty() &&
             !canGlideFromKey(key)
         ) {
             return actionKey(
@@ -1573,10 +1578,14 @@ class RetuiKeyboardService : InputMethodService() {
 
         view.addView(longPressLabelGroup(key), FrameLayout.LayoutParams(-2, -1, Gravity.CENTER))
 
-        view.contentDescription = if (key.longLabel.isNullOrBlank()) {
+        val longDescriptions = buildList {
+            key.longLabel?.takeIf { it.isNotBlank() }?.let(::add)
+            shortcutActions.mapTo(this) { it.label }
+        }
+        view.contentDescription = if (longDescriptions.isEmpty()) {
             key.label
         } else {
-            "${key.label}, long press ${key.longLabel}"
+            "${key.label}, long press for ${longDescriptions.joinToString()}"
         }
         return view
     }
@@ -1837,12 +1846,14 @@ class RetuiKeyboardService : InputMethodService() {
     private fun bindLongPressKey(view: FrameLayout, key: KeySpec) {
         view.isClickable = true
         view.isFocusable = false
+        val longPressChoices = longPressChoices(key)
         var longPressHandled = false
         var primaryCommitted = false
         var longPressRunnable: Runnable? = null
         var popup: PopupWindow? = null
-        var accentPopup: AccentPopup? = null
-        var accentIndex = 0
+        var choicePopup: LongPressPopup? = null
+        var choiceIndex = 0
+        var shortcutSelectionArmed = false
         var downRawX = 0f
         var downRawY = 0f
         var glideTracking = false
@@ -1851,14 +1862,14 @@ class RetuiKeyboardService : InputMethodService() {
         fun clearPopup() {
             popup?.dismiss()
             popup = null
-            accentPopup?.popup?.dismiss()
-            accentPopup = null
+            choicePopup?.popup?.dismiss()
+            choicePopup = null
         }
-        fun updateAccentSelection(rawX: Float) {
-            val current = accentPopup ?: return
+        fun updateLongPressSelection(rawX: Float) {
+            val current = choicePopup ?: return
             val nextIndex = current.indexForRawX(rawX)
-            if (nextIndex == accentIndex) return
-            accentIndex = nextIndex
+            if (nextIndex == choiceIndex) return
+            choiceIndex = nextIndex
             current.select(nextIndex)
             if (layout.vibrateOnKeypress) {
                 vibrateKey(view, HapticFeedbackConstants.KEYBOARD_TAP, durationMs = 6L)
@@ -1869,7 +1880,8 @@ class RetuiKeyboardService : InputMethodService() {
                 MotionEvent.ACTION_DOWN -> {
                     longPressHandled = false
                     primaryCommitted = false
-                    accentIndex = 0
+                    choiceIndex = 0
+                    shortcutSelectionArmed = false
                     glideTracking = false
                     glideTrace.clear()
                     glidePoints.clear()
@@ -1888,10 +1900,10 @@ class RetuiKeyboardService : InputMethodService() {
                         longPressHandled = true
                         if (primaryCommitted) rollbackPrimaryCommit(key)
                         clearPopup()
-                        if (key.accentVariants.isNotEmpty()) {
-                            accentIndex = 0
-                            accentPopup = showAccentVariantPicker(view, key.accentVariants)
-                            updateAccentSelection(downRawX)
+                        if (longPressChoices.isNotEmpty()) {
+                            choiceIndex = 0
+                            choicePopup = showLongPressPicker(view, longPressChoices)
+                            updateLongPressSelection(downRawX)
                         } else if (key.longSpecial == Special.EMOJI_PICKER) {
                             openEmojiMode()
                         } else {
@@ -1927,8 +1939,14 @@ class RetuiKeyboardService : InputMethodService() {
                             return@setOnTouchListener true
                         }
                     }
-                    if (longPressHandled && key.accentVariants.isNotEmpty()) {
-                        updateAccentSelection(event.rawX)
+                    if (longPressHandled && choicePopup != null) {
+                        updateLongPressSelection(event.rawX)
+                        if (
+                            longPressChoices.getOrNull(choiceIndex)?.shortcut != null &&
+                            movedPastSelectionThreshold(event.rawX, event.rawY, downRawX, downRawY)
+                        ) {
+                            shortcutSelectionArmed = true
+                        }
                     }
                     true
                 }
@@ -1947,17 +1965,20 @@ class RetuiKeyboardService : InputMethodService() {
                         glidePoints.clear()
                         true
                     } else {
-                        val selectedAccent = if (longPressHandled && key.accentVariants.isNotEmpty()) {
-                            key.accentVariants.getOrNull(accentIndex)
+                        val selectedChoice = if (longPressHandled && choicePopup != null) {
+                            longPressChoices.getOrNull(choiceIndex)
                         } else {
                             null
                         }
                         touched.isPressed = false
-                        if (selectedAccent != null) {
+                        if (selectedChoice?.text != null) {
                             clearPopup()
-                            commitFromKey(selectedAccent)
+                            commitFromKey(selectedChoice.text)
+                        } else if (selectedChoice?.shortcut != null && shortcutSelectionArmed) {
+                            clearPopup()
+                            requestLauncherShortcut(selectedChoice.shortcut)
                         } else if (longPressHandled) {
-                            // Long-press action already fired at timeout for better touch latency.
+                            // Non-picker long-press actions already fire at timeout; shortcut picks require a swipe.
                             clearPopup()
                         } else if (!primaryCommitted) {
                             clearPopup()
@@ -1983,6 +2004,23 @@ class RetuiKeyboardService : InputMethodService() {
                 else -> true
             }
         }
+    }
+
+    private fun longPressChoices(key: KeySpec): List<LongPressChoice> = buildList {
+        key.accentVariants.mapTo(this) { LongPressChoice(text = it) }
+        launcherShortcuts?.forKey(key.text).orEmpty().mapTo(this) { LongPressChoice(shortcut = it) }
+    }
+
+    private fun movedPastSelectionThreshold(
+        rawX: Float,
+        rawY: Float,
+        downRawX: Float,
+        downRawY: Float
+    ): Boolean {
+        val dx = rawX - downRawX
+        val dy = rawY - downRawY
+        val threshold = dpFloat(12f)
+        return (dx * dx) + (dy * dy) >= threshold * threshold
     }
 
     private fun movedPastGlideThreshold(rawX: Float, rawY: Float, downRawX: Float, downRawY: Float): Boolean {
@@ -2348,35 +2386,60 @@ class RetuiKeyboardService : InputMethodService() {
         }
     }
 
-    private fun showAccentVariantPicker(anchor: View, variants: List<String>): AccentPopup? {
-        if (variants.isEmpty()) return null
+    private fun showLongPressPicker(anchor: View, choices: List<LongPressChoice>): LongPressPopup? {
+        if (choices.isEmpty()) return null
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         row.background = panel(brightenColor(theme.keyBg, 1.22f, 30), theme.border, 4)
         row.elevation = dpFloat(8f)
 
-        val cellWidth = dp(40)
+        val anchorLocation = IntArray(2)
+        anchor.getLocationOnScreen(anchorLocation)
+        val availableWidth = max(anchor.rootView.width, resources.displayMetrics.widthPixels)
+        val cellWidth = min(dp(40), availableWidth / choices.size)
         val height = dp(44)
-        val cells = variants.map { variant ->
-            keyLabel(variant, Gravity.CENTER, max(14, keyTextSize(variant) + 4)).also { cell ->
-                cell.contentDescription = "Insert $variant"
-                row.addView(cell, LinearLayout.LayoutParams(cellWidth, -1))
+        val cells = choices.map { choice ->
+            val cell = choice.text?.let { text ->
+                keyLabel(text, Gravity.CENTER, max(14, keyTextSize(text) + 4)).apply {
+                    contentDescription = "Insert $text"
+                }
+            } ?: ImageView(this).apply {
+                contentDescription = choice.shortcut?.label
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                setPadding(dp(7), dp(7), dp(7), dp(7))
+                val icon = choice.shortcut?.iconUri?.let { uri ->
+                    runCatching {
+                        setImageURI(Uri.parse(uri))
+                        drawable
+                    }.getOrNull()
+                }
+                if (icon == null) {
+                    setImageDrawable(GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(theme.keyText)
+                        setSize(dp(12), dp(12))
+                    })
+                }
             }
+            row.addView(cell, LinearLayout.LayoutParams(cellWidth, -1))
+            cell
         }
 
-        val width = cellWidth * variants.size
+        val width = cellWidth * choices.size
         val popup = PopupWindow(row, width, height, false)
         popup.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         popup.isOutsideTouchable = false
         popup.isClippingEnabled = false
         popup.elevation = dpFloat(8f)
 
-        val xOffset = (anchor.width - width) / 2
+        val desiredLeft = anchorLocation[0] + (anchor.width - width) / 2
+        val popupLeft = desiredLeft.coerceIn(0, max(0, availableWidth - width))
+        val xOffset = popupLeft - anchorLocation[0]
         val yOffset = -anchor.height - height - dp(18)
         val activeBackground = panel(brightenColor(theme.keyBg, 1.42f, 70), theme.border, 4)
         return try {
             popup.showAsDropDown(anchor, xOffset, yOffset)
-            AccentPopup(popup, row, cells, cellWidth, activeBackground).also { it.select(0) }
+            LongPressPopup(popup, row, cells, cellWidth, activeBackground).also { it.select(0) }
         } catch (_: Exception) {
             null
         }
@@ -2904,6 +2967,25 @@ class RetuiKeyboardService : InputMethodService() {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
         startActivity(intent)
+    }
+
+    private fun requestLauncherShortcut(shortcut: LauncherShortcutContract.Shortcut) {
+        val token = launcherShortcuts?.token ?: return
+        val intent = Intent(LauncherShortcutContract.ACTION_RUN).apply {
+            setClassName(
+                LauncherShortcutContract.LAUNCHER_PACKAGE,
+                LauncherShortcutContract.LAUNCHER_ACTIVITY
+            )
+            putExtra(LauncherShortcutContract.EXTRA_ID, shortcut.id)
+            putExtra(LauncherShortcutContract.EXTRA_TOKEN, token)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        }
+        try {
+            requestHideSelf(0)
+            startActivity(intent)
+        } catch (_: Exception) {
+            Toast.makeText(this, "Re:T-UI Launcher shortcut unavailable", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun toggleModifier(special: Special) {
@@ -3603,6 +3685,7 @@ class RetuiKeyboardService : InputMethodService() {
         val previousTheme = theme
         val previousSymbols = symbols
         val frameChanged = source == ThemeSource.LAUNCHER && frameRenderer.accept(bundle)
+        val shortcutsChanged = source == ThemeSource.LAUNCHER && applyLauncherShortcuts(bundle)
         if (source == ThemeSource.LAUNCHER) {
             if (containsThemeValue(bundle)) {
                 val launcherTheme = themeFromBundle(
@@ -3621,7 +3704,16 @@ class RetuiKeyboardService : InputMethodService() {
         RetuiVisualContract.string(bundle, RetuiVisualContract.CONTEXT, "keyboard_context", "path")?.let { contextLabel = compactContext(it) }
         RetuiVisualContract.string(bundle, RetuiVisualContract.MODE, "keyboard_mode", "mode")?.let { modeLabel = it.uppercase().take(14) }
         RetuiVisualContract.booleanOrNull(bundle, "keyboard_symbols", "symbols")?.let { symbols = it }
-        return theme != previousTheme || symbols != previousSymbols || frameChanged
+        return theme != previousTheme || symbols != previousSymbols || frameChanged || shortcutsChanged
+    }
+
+    private fun applyLauncherShortcuts(bundle: Bundle): Boolean {
+        if (currentInfo?.packageName != LauncherShortcutContract.LAUNCHER_PACKAGE) return false
+        val raw = bundle.getString(LauncherShortcutContract.BUNDLE_KEY) ?: return false
+        val next = LauncherShortcutContract.accept(prefs, raw) ?: return false
+        if (next == launcherShortcuts) return false
+        launcherShortcuts = next
+        return true
     }
 
     private fun themeFromBundle(base: ThemeState, bundle: Bundle): ThemeState {
@@ -3842,10 +3934,15 @@ class RetuiKeyboardService : InputMethodService() {
         val specialStyle: Boolean = false
     )
 
-    private class AccentPopup(
+    private data class LongPressChoice(
+        val text: String? = null,
+        val shortcut: LauncherShortcutContract.Shortcut? = null
+    )
+
+    private class LongPressPopup(
         val popup: PopupWindow,
         private val row: LinearLayout,
-        private val cells: List<TextView>,
+        private val cells: List<View>,
         private val cellWidth: Int,
         private val activeBackground: Drawable
     ) {
