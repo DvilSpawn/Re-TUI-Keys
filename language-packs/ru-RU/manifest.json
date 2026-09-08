@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "id": "ru-RU",
+  "languageTag": "ru-RU",
+  "name": "Russian",
+  "nativeName": "Русский",
+  "switchLabel": "RU",
+  "version": 1,
+  "direction": "ltr",
+  "casing": "lower",
+  "rowStyle": "grid",
+  "rows": [
+    ["щ", "ю", "э", "ы", "о", "щ", "й", "н", "к", "г", "б", "ц"],
+    ["ф", "у", "е", "и", "а", "х", "л", "р", "т", "с", "п", "ж"],
+    ["ю", "ё", "ь", "я", "ъ", "в", "м", "д", "ш", "ч", "з"]
+  ],
+  "comma": ",",
+  "period": ".",
+  "questionMark": "?",
+  "spaceLabel": "ПРОБЕЛ"
+}
