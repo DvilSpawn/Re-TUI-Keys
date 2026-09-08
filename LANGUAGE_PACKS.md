@@ -8,9 +8,11 @@ that includes language-pack support.
 
 ## Available packs
 
-| Language | Locale | Version | Download | Release notes |
-| --- | --- | --- | --- | --- |
-| Persian / فارسی | `fa-IR` | 1 | [Download `.retui-lang`](https://github.com/DvilSpawn/Re-TUI-Keys/releases/download/language-pack-fa-IR-v1/persian-fa-IR-v1.retui-lang) | [Persian Language Pack v1](https://github.com/DvilSpawn/Re-TUI-Keys/releases/tag/language-pack-fa-IR-v1) |
+| Language | Locale | Version | Layout | Download | Release notes |
+| --- | --- | --- | --- | --- | --- |
+| Persian / فارسی | `fa-IR` | 1 | staggered | [Download `.retui-lang`](https://github.com/DvilSpawn/Re-TUI-Keys/releases/download/language-pack-fa-IR-v1/persian-fa-IR-v1.retui-lang) | [Persian Language Pack v1](https://github.com/DvilSpawn/Re-TUI-Keys/releases/tag/language-pack-fa-IR-v1) |
+| Lithuanian / Lietuvių | `lt-LT` | 1 | grid, 12 columns | [Download `.retui-lang`](https://github.com/DvilSpawn/Re-TUI-Keys/releases/download/language-pack-lt-LT-v1/lithuanian-lt-LT-v1.retui-lang) | [Lithuanian Language Pack v1](https://github.com/DvilSpawn/Re-TUI-Keys/releases/tag/language-pack-lt-LT-v1) |
+| Russian / Русский | `ru-RU` | 1 | grid, 12 columns | [Download `.retui-lang`](https://github.com/DvilSpawn/Re-TUI-Keys/releases/download/language-pack-ru-RU-v1/russian-ru-RU-v1.retui-lang) | [Russian Language Pack v1](https://github.com/DvilSpawn/Re-TUI-Keys/releases/tag/language-pack-ru-RU-v1) |
 
 ## Install a pack
 
@@ -50,6 +52,70 @@ A `.retui-lang` file is a ZIP archive containing these files at its root:
 Download and unzip the Persian pack above as the reference structure. Packs must
 be data-only: executable files, nested directories, and unknown archive entries
 are rejected by the app.
+
+### Upper and lower case
+
+Write the three key rows in lower case. Re:TUI Keys detects a bicameral script
+from those rows and then adds a SHIFT key to the bottom row, cases the key caps
+with the pack `languageTag` (so `lt`, `tr` and similar behave correctly), and
+enables sentence capitalization. Caseless scripts such as Persian get no SHIFT
+key and keep the extra room for the joiner key.
+
+Set `"casing": "none"` to force SHIFT off for a layout that uses a bicameral
+script but should never produce capitals. `"casing": "lower"` (the default)
+keeps the completion dictionary case-insensitive, so `Labas` and `labas` match
+the same entry.
+
+A wide bottom row is allowed: SHIFT, the joiner key and BACKSPACE shrink so the
+letters keep their width.
+
+### Row style
+
+`"rowStyle"` picks how the three rows are drawn.
+
+`"staggered"` (the default) is the phone-keyboard shape: the middle row is inset,
+and the bottom row carries SHIFT on the left and BACKSPACE on the right beside
+the letters.
+
+`"grid"` is the ortholinear shape of a reviung41 or corne: every key is the same
+size, rows are not inset, and the bottom row starts with BACKSPACE. SHIFT does
+not fit in the letter rows, so it joins the special key row (ESC, TAB, CTRL, ALT,
+SUPER, DEL) — or the bottom row when that row is hidden, so it is never lost.
+Turn on **Portrait special keys** in Settings to keep SHIFT next to the other
+modifiers.
+
+Grid rows must line up: the first two rows are equal width and the third has one
+key fewer, because BACKSPACE takes that column. A 12-column pack therefore
+declares 12, 12 and 11 keys:
+
+```json
+{
+  "schema": 1,
+  "id": "lt-LT",
+  "languageTag": "lt-LT",
+  "name": "Lithuanian",
+  "nativeName": "Lietuvių",
+  "switchLabel": "LT",
+  "version": 1,
+  "rowStyle": "grid",
+  "rows": [
+    ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "ą", "ų"],
+    ["a", "s", "d", "f", "g", "h", "j", "k", "l", "ė", "į", "š"],
+    ["z", "x", "c", "v", "b", "n", "m", "ž", "č", "ū", "ę"]
+  ]
+}
+```
+
+A grid pack has no separate joiner key; put the joiner character in a row if the
+language needs it on the keyboard. `joiners` still governs word boundaries and
+completions either way.
+
+### Split keyboard
+
+**Split keyboard** in Settings works with language packs, not just English. Each
+row is cut in half and the halves are padded to the same width, so a 12-column
+grid pack becomes two banks of six — the reviung41 and corne arrangement. In a
+split grid layout SHIFT sits in the bottom row next to the language key.
 
 To submit an official pack:
 
