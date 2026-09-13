@@ -3,6 +3,9 @@
 Publish each file from `dist/` as a separate GitHub release asset. Users
 download the `.retui-lang` file and import it from Re:TUI Keys Settings.
 
+Run `./build.sh` to repack every language directory into `dist/`, or
+`./build.sh fa-IR` for one. Edit `<locale>/manifest.json`, rebuild, re-import.
+
 Every pack is a ZIP with these root entries:
 
 - `manifest.json`: schema, locale, key rows, punctuation, normalization rules.
