@@ -11,3 +11,11 @@ Every pack is a ZIP with these root entries:
 
 Packs are data-only. The app rejects unknown files, duplicate entries, invalid
 layouts, oversized data, unsupported schemas, and malformed language IDs.
+
+Write key rows in lower case. A bicameral script is detected from the rows and
+gets a SHIFT key cased with the pack `languageTag`; `"casing": "none"` turns
+that off for caseless scripts such as Persian.
+
+`"rowStyle": "grid"` draws an ortholinear layout — uniform key sizes, BACKSPACE
+in the first column of the bottom row, SHIFT moved to the special key row. Its
+rows must be N, N and N-1 keys wide.
