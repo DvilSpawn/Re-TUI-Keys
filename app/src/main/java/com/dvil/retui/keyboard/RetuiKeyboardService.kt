@@ -63,6 +63,7 @@ import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -3388,13 +3389,19 @@ class RetuiKeyboardService : InputMethodService() {
         }
     }
 
+    private fun applyTypedWordCasing(typed: String, word: String): String {
+        val pack = activeLanguagePack ?: return TypedWordCasing.apply(typed, word, Locale.ROOT)
+        return if (pack.bicameral) TypedWordCasing.apply(typed, word, pack.locale) else word
+    }
+
     private fun commitSuggestion(word: String) {
         val ic = currentInputConnection ?: return
         val currentWord = currentWordBeforeCursorContext()
         if (currentWord.value.isNotEmpty() && !currentWord.fromLocalFallback) {
             ic.deleteSurroundingText(currentWord.value.length, 0)
         }
-        ic.commitText(suggestionCommitText(applyActiveWordCasing(word), currentWord), 1)
+        val casedWord = applyActiveWordCasing(applyTypedWordCasing(currentWord.value, word))
+        ic.commitText(suggestionCommitText(casedWord, currentWord), 1)
         pendingAddWord = null
         localWordBeforeCursor = ""
         activeRecordAcceptedWord(word)
