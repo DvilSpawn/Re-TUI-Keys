@@ -14,6 +14,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.dvil.retui.contract.RetuiVisualContract
 
 class KeyboardProbeActivity : Activity() {
     private lateinit var input: ProbeEditText
@@ -78,22 +79,32 @@ class KeyboardProbeActivity : Activity() {
             val connection = super.onCreateInputConnection(outAttrs)
             outAttrs.imeOptions = EditorInfo.IME_ACTION_GO or EditorInfo.IME_FLAG_NO_FULLSCREEN
             outAttrs.extras = (outAttrs.extras ?: Bundle()).apply {
-                putString("keyboard_context", "/storage/emulated/0")
-                putString("keyboard_mode", "command")
-                putInt("theme_bg", Color.rgb(2, 6, 4))
-                putInt("theme_text", Color.rgb(102, 255, 147))
-                putInt("theme_border", Color.rgb(48, 180, 94))
-                putInt("terminal_bg", Color.rgb(8, 18, 12))
-                putInt("module_header_bg_color", Color.rgb(10, 38, 22))
-                putInt("module_header_text_color", Color.rgb(194, 255, 210))
-                putInt("input_bg_color", Color.rgb(13, 29, 19))
-                putInt("input_text_color", Color.rgb(154, 255, 181))
-                putInt("input_font_size", 14)
-                putBoolean("enable_cyberdeck_mode", true)
-                putBoolean("enable_crt_filter", true)
+                val C = RetuiVisualContract
+                putString(C.CONTEXT, "/storage/emulated/0")
+                putString(C.MODE, "command")
+                putInt(C.BG, Color.rgb(2, 6, 4))
+                putInt(C.TEXT, Color.rgb(102, 255, 147))
+                putInt(C.BORDER, Color.rgb(48, 180, 94))
+                putInt(C.TERMINAL_BG, Color.rgb(8, 18, 12))
+                putInt(C.HEADER_BG, Color.rgb(10, 38, 22))
+                putInt(C.HEADER_TEXT, Color.rgb(194, 255, 210))
+                putInt(C.INPUT_BG, Color.rgb(13, 29, 19))
+                putInt(C.INPUT_TEXT, Color.rgb(154, 255, 181))
+                putInt(C.INPUT_FONT_SIZE, 14)
+                putBoolean(C.CYBERDECK_MODE, true)
+                putBoolean(C.CRT_FILTER, true)
             }
             outAttrs.privateImeOptions =
-                "com.dvil.retui.keyboard:keyboard_context=/storage/emulated/0;keyboard_mode=command;theme_bg=#020604;terminal_bg=#08120c;theme_border=#30b45e;input_bg_color=#0d1d13;input_text_color=#9affb5;enable_cyberdeck_mode=true;enable_crt_filter=true"
+                "com.dvil.retui.keyboard:" +
+                    "${RetuiVisualContract.CONTEXT}=/storage/emulated/0;" +
+                    "${RetuiVisualContract.MODE}=command;" +
+                    "${RetuiVisualContract.BG}=#020604;" +
+                    "${RetuiVisualContract.TERMINAL_BG}=#08120c;" +
+                    "${RetuiVisualContract.BORDER}=#30b45e;" +
+                    "${RetuiVisualContract.INPUT_BG}=#0d1d13;" +
+                    "${RetuiVisualContract.INPUT_TEXT}=#9affb5;" +
+                    "${RetuiVisualContract.CYBERDECK_MODE}=true;" +
+                    "${RetuiVisualContract.CRT_FILTER}=true"
             return connection
         }
     }
