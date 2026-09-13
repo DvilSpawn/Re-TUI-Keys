@@ -43,6 +43,7 @@ dependencies.
 - Local suggestion strip above the keyboard.
 - User dictionary with visible local word list in settings.
 - Manual dictionary add/remove, backup, and restore.
+- Importable data-only language packs with an in-keyboard language switcher.
 - Theme sync from the launcher through IME-private data.
 - Optional number row, arrow row, quick period, haptics, sound, sizing, margins,
   key gaps, stroke width, and background image controls.
@@ -86,6 +87,23 @@ Backup and restore are manual by design. The manifest disables Android backup
 and includes explicit backup/data extraction exclusion rules, so dictionary data
 stays local unless the user exports it.
 
+## Language Packs
+
+English ships with the app. Additional languages are `.retui-lang` ZIP files
+containing `manifest.json`, `words.tsv`, and an optional `LICENSE` or `NOTICE`.
+Users install a downloaded pack from `LANGUAGE PACKS` in Settings; the app
+validates it, stores it privately, and exposes it through the language key.
+The in-app **Browse language packs** action opens the
+[Language Packs page](https://github.com/DvilSpawn/Re-TUI-Keys/blob/main/LANGUAGE_PACKS.md),
+where every language links to its own GitHub Release. Deleting an installed
+pack switches the keyboard back to English.
+
+The first pack is Persian (`fa-IR`) at
+`language-packs/dist/persian-fa-IR-v1.retui-lang`. It includes an RTL Persian
+layout, Persian digits and punctuation, zero-width non-joiner input, character
+normalization, and 50,000 offline completion entries. Language packs contain
+data only and cannot execute code.
+
 ## Launcher Theme Bridge
 
 The keyboard can receive Re:TUI launcher theme data through standard IME
@@ -103,6 +121,11 @@ The keyboard still works without the launcher. In that case it uses its built-in
 terminal theme defaults.
 
 ## Building
+
+Install Android SDK 36 and set `ANDROID_HOME` (or `sdk.dir` in
+`local.properties`) to your SDK location. The real Launcher visual contract is
+included in `retui-contract/`; no Launcher checkout or private repository is
+required.
 
 ```bash
 ./gradlew assembleDebug

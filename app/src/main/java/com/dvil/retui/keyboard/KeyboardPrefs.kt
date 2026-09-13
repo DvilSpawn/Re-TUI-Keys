@@ -7,6 +7,7 @@ object KeyboardPrefs {
 
     const val KEY_BACKGROUND_IMAGE_OPACITY = "layout.backgroundImageOpacity"
     const val KEY_BACKGROUND_IMAGE_URI = "layout.backgroundImageUri"
+    const val KEY_ACCEPT_LAUNCHER_FRAMES = "frame.acceptLauncher"
     const val KEY_BOTTOM_MARGIN_DP = "layout.bottomMarginDp"
     const val KEY_CLIPBOARD_AUTO_SAVE = "clipboard.autoSave"
     const val KEY_CHARACTER_SIZE_SP = "layout.characterSizeSp"
@@ -14,6 +15,7 @@ object KeyboardPrefs {
     const val KEY_CORNER_RADIUS_DP = "layout.cornerRadiusDp"
     const val KEY_HEIGHT_PERCENT = "layout.heightPercent"
     const val KEY_HORIZONTAL_MARGIN_DP = "layout.horizontalMarginDp"
+    const val KEY_FONT_URI = "layout.fontUri"
     const val KEY_KEY_GAP_DP = "layout.keyGapDp"
     const val KEY_LANDSCAPE_HEIGHT_PERCENT = "layout.landscapeHeightPercent"
     const val KEY_GLIDE_DIAGNOSTICS = "typing.glideDiagnostics"
@@ -38,6 +40,7 @@ object KeyboardPrefs {
     const val KEY_VIBRATE_ON_KEYPRESS = "layout.vibrateOnKeypress"
 
     const val DEFAULT_BACKGROUND_IMAGE_OPACITY = 55
+    const val DEFAULT_ACCEPT_LAUNCHER_FRAMES = true
     const val DEFAULT_BOTTOM_MARGIN_DP = 4
     const val DEFAULT_CLIPBOARD_AUTO_SAVE = true
     const val DEFAULT_CHARACTER_SIZE_SP = 14
@@ -67,6 +70,7 @@ object KeyboardPrefs {
         val legacyMargin = prefs.getInt(KEY_LEGACY_OUTER_MARGIN_DP, DEFAULT_HORIZONTAL_MARGIN_DP)
         val legacyHeight = prefs.getInt(KEY_HEIGHT_PERCENT, DEFAULT_HEIGHT_PERCENT).coerceIn(80, 180)
         return KeyboardLayoutSettings(
+            acceptLauncherFrames = prefs.getBoolean(KEY_ACCEPT_LAUNCHER_FRAMES, DEFAULT_ACCEPT_LAUNCHER_FRAMES),
             backgroundImageOpacity = prefs.getInt(
                 KEY_BACKGROUND_IMAGE_OPACITY,
                 DEFAULT_BACKGROUND_IMAGE_OPACITY
@@ -81,6 +85,7 @@ object KeyboardPrefs {
             ).coerceIn(1, 365),
             cornerRadiusDp = prefs.getInt(KEY_CORNER_RADIUS_DP, DEFAULT_CORNER_RADIUS_DP).coerceIn(0, 18),
             horizontalMarginDp = prefs.getInt(KEY_HORIZONTAL_MARGIN_DP, legacyMargin).coerceIn(0, 48),
+            fontUri = prefs.getString(KEY_FONT_URI, null)?.takeIf { it.isNotBlank() },
             keyGapDp = prefs.getInt(KEY_KEY_GAP_DP, DEFAULT_KEY_GAP_DP).coerceIn(0, 8),
             landscapeHeightPercent = prefs.getInt(
                 KEY_LANDSCAPE_HEIGHT_PERCENT,
@@ -112,6 +117,7 @@ object KeyboardPrefs {
 
     fun resetLayout(editor: SharedPreferences.Editor) {
         editor
+            .putBoolean(KEY_ACCEPT_LAUNCHER_FRAMES, DEFAULT_ACCEPT_LAUNCHER_FRAMES)
             .putInt(KEY_BACKGROUND_IMAGE_OPACITY, DEFAULT_BACKGROUND_IMAGE_OPACITY)
             .remove(KEY_BACKGROUND_IMAGE_URI)
             .putInt(KEY_BOTTOM_MARGIN_DP, DEFAULT_BOTTOM_MARGIN_DP)
@@ -120,6 +126,7 @@ object KeyboardPrefs {
             .putInt(KEY_CLIPBOARD_RETENTION_DAYS, DEFAULT_CLIPBOARD_RETENTION_DAYS)
             .putInt(KEY_CORNER_RADIUS_DP, DEFAULT_CORNER_RADIUS_DP)
             .putInt(KEY_HORIZONTAL_MARGIN_DP, DEFAULT_HORIZONTAL_MARGIN_DP)
+            .remove(KEY_FONT_URI)
             .putInt(KEY_KEY_GAP_DP, DEFAULT_KEY_GAP_DP)
             .putInt(KEY_LANDSCAPE_HEIGHT_PERCENT, DEFAULT_LANDSCAPE_HEIGHT_PERCENT)
             .putBoolean(KEY_GLIDE_DIAGNOSTICS, DEFAULT_GLIDE_DIAGNOSTICS)
@@ -153,8 +160,9 @@ object KeyboardPrefs {
             }
             if (!prefs.contains(KEY_HORIZONTAL_MARGIN_DP)) {
                 editor.putInt(KEY_HORIZONTAL_MARGIN_DP, legacyMargin)
-                changed = true
             }
+            editor.remove(KEY_LEGACY_OUTER_MARGIN_DP)
+            changed = true
         }
 
         if (prefs.contains(KEY_HEIGHT_PERCENT)) {
@@ -165,8 +173,9 @@ object KeyboardPrefs {
             }
             if (!prefs.contains(KEY_LANDSCAPE_HEIGHT_PERCENT)) {
                 editor.putInt(KEY_LANDSCAPE_HEIGHT_PERCENT, legacyHeight)
-                changed = true
             }
+            editor.remove(KEY_HEIGHT_PERCENT)
+            changed = true
         }
 
         if (
@@ -192,10 +201,18 @@ object KeyboardPrefs {
             changed = true
         }
 
+        if (
+            prefs.getBoolean(KEY_THEME_COLORS_OVERRIDDEN, false) &&
+            THEME_SNAPSHOT_SUFFIXES.none { prefs.contains("theme.$it") }
+        ) {
+            editor.putBoolean(KEY_THEME_COLORS_OVERRIDDEN, false)
+            changed = true
+        }
+
         if (changed) editor.apply()
     }
 
-    private val THEME_SNAPSHOT_SUFFIXES = arrayOf(
+    internal val THEME_SNAPSHOT_SUFFIXES = arrayOf(
         "bg",
         "text",
         "border",
@@ -225,6 +242,7 @@ object KeyboardPrefs {
 }
 
 data class KeyboardLayoutSettings(
+    val acceptLauncherFrames: Boolean,
     val backgroundImageOpacity: Int,
     val backgroundImageUri: String?,
     val bottomMarginDp: Int,
@@ -233,6 +251,7 @@ data class KeyboardLayoutSettings(
     val clipboardRetentionDays: Int,
     val cornerRadiusDp: Int,
     val horizontalMarginDp: Int,
+    val fontUri: String?,
     val keyGapDp: Int,
     val landscapeHeightPercent: Int,
     val glideDiagnostics: Boolean,

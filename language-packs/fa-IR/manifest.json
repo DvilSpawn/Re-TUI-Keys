@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "id": "fa-IR",
+  "languageTag": "fa-IR",
+  "name": "Persian",
+  "nativeName": "فارسی",
+  "switchLabel": "فا",
+  "version": 1,
+  "direction": "rtl",
+  "casing": "none",
+  "stripMarks": true,
+  "rows": [
+    ["ض", "ص", "ث", "ق", "ف", "غ", "ع", "ه", "خ", "ح", "ج", "چ"],
+    ["ش", "س", "ی", "ب", "ل", "ا", "ت", "ن", "م", "ک", "گ"],
+    ["ظ", "ط", "ز", "ر", "ذ", "د", "پ", "و", "ژ"]
+  ],
+  "digits": ["۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹", "۰"],
+  "comma": "،",
+  "period": ".",
+  "questionMark": "؟",
+  "spaceLabel": "فاصله",
+  "joinerLabel": "نیم",
+  "joiners": ["‌"],
+  "characterMap": {
+    "ي": "ی",
+    "ى": "ی",
+    "ك": "ک",
+    "ـ": ""
+  }
+}
