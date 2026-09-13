@@ -359,7 +359,7 @@ class RetuiKeyboardService : InputMethodService() {
         val main = keyboardBody()
         if (usesNumberPad()) {
             addNumberPadRows(main, landscape)
-        } else if (landscape && layout.splitKeyboard && activeLanguagePack == null) {
+        } else if (landscape && layout.splitKeyboard) {
             addSplitTextRows(main)
         } else {
             addTextRows(main, landscape)
@@ -1040,25 +1040,41 @@ class RetuiKeyboardService : InputMethodService() {
         bottomHeight: Int,
         landscape: Boolean
     ) {
-        if (layout.showNumberRow) {
-            val digits = pack.digits.ifEmpty { listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0") }
-            addKeyRow(parent, digits.map { KeySpec(it, text = it) }, if (landscape) 26 else 28)
+        if (pack.gridRows) {
+            addLanguagePackGridRows(parent, pack, keyHeight, bottomHeight, landscape)
+            return
         }
-        addKeyRow(parent, packKeyRow(pack.rows[0]), keyHeight)
+        if (layout.showNumberRow) {
+            addKeyRow(parent, packDigits(pack).map { KeySpec(it, text = it) }, if (landscape) 26 else 28)
+        }
+        addKeyRow(parent, packKeyRow(pack, pack.rows[0]), keyHeight)
         addKeyRow(
             parent,
             mutableListOf(KeySpec("", 0.45f, Special.SPACER)).apply {
-                addAll(packKeyRow(pack.rows[1]))
+                addAll(packKeyRow(pack, pack.rows[1]))
                 add(KeySpec("", 0.45f, Special.SPACER))
             },
             keyHeight
         )
+        val joiner = pack.joiners.firstOrNull()
+        val weights = LanguagePackLayout.specialWeights(
+            letterCount = pack.rows[2].size,
+            requested = buildList {
+                if (pack.bicameral) add(if (landscape) 1.15f else 1.35f)
+                if (joiner != null) add(1.15f)
+                add(1.25f)
+            }
+        )
         val third = mutableListOf<KeySpec>()
-        pack.joiners.firstOrNull()?.let { joiner ->
-            third.add(KeySpec(pack.joinerLabel, 1.15f, text = joiner.toString(), specialStyle = true))
+        var weightIndex = 0
+        if (pack.bicameral) {
+            third.add(KeySpec(ICON_SHIFT, weights[weightIndex++], Special.SHIFT))
         }
-        third.addAll(packKeyRow(pack.rows[2]))
-        third.add(KeySpec(ICON_BACKSPACE, 1.25f, Special.BACKSPACE))
+        if (joiner != null) {
+            third.add(KeySpec(pack.joinerLabel, weights[weightIndex++], text = joiner.toString(), specialStyle = true))
+        }
+        third.addAll(packKeyRow(pack, pack.rows[2]))
+        third.add(KeySpec(ICON_BACKSPACE, weights[weightIndex], Special.BACKSPACE))
         addKeyRow(parent, third, keyHeight)
         if (layout.showArrowRow) {
             addKeyRow(parent, arrowRow(), if (landscape) 26 else 28)
@@ -1066,13 +1082,81 @@ class RetuiKeyboardService : InputMethodService() {
         addKeyRow(parent, bottomRow(), bottomHeight)
     }
 
-    private fun packKeyRow(keys: List<String>): List<KeySpec> = keys.map { KeySpec(it, text = it) }
+    /**
+     * Ortholinear layout: three rows of identically sized keys, BACKSPACE occupying the first
+     * column of the bottom row. SHIFT does not fit here, so it moves to the special key row.
+     */
+    private fun addLanguagePackGridRows(
+        parent: LinearLayout,
+        pack: LanguagePack,
+        keyHeight: Int,
+        bottomHeight: Int,
+        landscape: Boolean
+    ) {
+        if (layout.showNumberRow) {
+            addKeyRow(parent, packGridDigitRow(pack), if (landscape) 26 else 28)
+        }
+        addKeyRow(parent, packKeyRow(pack, pack.rows[0]), keyHeight)
+        addKeyRow(parent, packKeyRow(pack, pack.rows[1]), keyHeight)
+        addKeyRow(
+            parent,
+            mutableListOf(KeySpec(ICON_BACKSPACE, 1f, Special.BACKSPACE)).apply {
+                addAll(packKeyRow(pack, pack.rows[2]))
+            },
+            keyHeight
+        )
+        if (layout.showArrowRow) {
+            addKeyRow(parent, arrowRow(), if (landscape) 26 else 28)
+        }
+        addKeyRow(parent, bottomRow(), bottomHeight)
+    }
+
+    private fun packGridDigitRow(pack: LanguagePack): List<KeySpec> {
+        val digits = packDigits(pack).map { KeySpec(it, text = it) }
+        val slack = pack.gridColumns - digits.size
+        if (slack <= 0) return digits
+        val leading = slack / 2f
+        return buildList {
+            add(KeySpec("", leading, Special.SPACER))
+            addAll(digits)
+            add(KeySpec("", slack - leading, Special.SPACER))
+        }
+    }
+
+    private fun packDigits(pack: LanguagePack): List<String> =
+        pack.digits.ifEmpty { listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0") }
+
+    private fun packKeyRow(pack: LanguagePack, keys: List<String>): List<KeySpec> {
+        val shift = pack.bicameral && isShiftActive()
+        return keys.map { key ->
+            val label = if (shift) pack.upperKey(key) else key
+            KeySpec(label, text = label)
+        }
+    }
+
+    /**
+     * SHIFT for grid layouts, which have no room for it in the letter rows. It joins the special
+     * key row when that is on screen, and the bottom row otherwise, so it is never lost.
+     */
+    private fun detachedShiftKey(weight: Float): KeySpec? {
+        val pack = activeLanguagePack ?: return null
+        if (!pack.gridRows || !pack.bicameral || symbols || usesNumberPad()) return null
+        return KeySpec(ICON_SHIFT, weight, Special.SHIFT)
+    }
+
+    private fun specialKeyRowVisible(): Boolean = !isLandscape() && layout.showPortraitSpecialKeys
 
     private fun addSplitTextRows(parent: LinearLayout) {
         val keyHeight = 28
         val bottomHeight = 32
         if (symbols) {
             addSplitSymbolRows(parent, keyHeight, bottomHeight)
+            return
+        }
+
+        val pack = activeLanguagePack
+        if (pack != null) {
+            addSplitLanguagePackRows(parent, pack, keyHeight, bottomHeight)
             return
         }
 
@@ -1132,6 +1216,100 @@ class RetuiKeyboardService : InputMethodService() {
         addSplitBottomRow(parent, bottomHeight)
     }
 
+    private fun addSplitLanguagePackRows(
+        parent: LinearLayout,
+        pack: LanguagePack,
+        keyHeight: Int,
+        bottomHeight: Int
+    ) {
+        val digitRow = if (layout.showNumberRow) {
+            packDigits(pack).map { KeySpec(it, text = it) }
+        } else {
+            emptyList()
+        }
+        val letterRows = packSplitLetterRows(pack)
+        val halfColumns = LanguagePackLayout.halfColumns(
+            (letterRows + listOf(digitRow)).map { it.size }
+        )
+
+        var specialIndex = 0
+        if (digitRow.isNotEmpty()) {
+            addSplitPackRow(parent, digitRow, splitSpecialRow(specialIndex++), halfColumns, 26)
+        }
+        letterRows.forEach { row ->
+            val center = if (specialIndex <= 2) splitSpecialRow(specialIndex++) else emptyList()
+            addSplitPackRow(parent, row, center, halfColumns, keyHeight)
+        }
+        if (layout.showArrowRow) {
+            addSplitPackRow(
+                parent = parent,
+                columns = listOf(
+                    KeySpec(ICON_LEFT, 1f, keyCode = KeyEvent.KEYCODE_DPAD_LEFT),
+                    KeySpec(ICON_UP, 1f, keyCode = KeyEvent.KEYCODE_DPAD_UP),
+                    KeySpec(ICON_DOWN, 1f, keyCode = KeyEvent.KEYCODE_DPAD_DOWN),
+                    KeySpec(ICON_RIGHT, 1f, keyCode = KeyEvent.KEYCODE_DPAD_RIGHT)
+                ),
+                center = emptyList(),
+                halfColumns = halfColumns,
+                heightDp = 26
+            )
+        }
+        addSplitBottomRow(parent, bottomHeight)
+    }
+
+    /**
+     * The three letter rows of a pack as flat column lists, every key one column wide. Split
+     * halves are padded to the same width, so the two clusters stay aligned whatever the pack
+     * declares.
+     */
+    private fun packSplitLetterRows(pack: LanguagePack): List<List<KeySpec>> {
+        val third = mutableListOf<KeySpec>()
+        if (pack.gridRows) {
+            third.add(KeySpec(ICON_BACKSPACE, 1f, Special.BACKSPACE))
+            third.addAll(packKeyRow(pack, pack.rows[2]))
+        } else {
+            if (pack.bicameral) {
+                third.add(KeySpec(ICON_SHIFT, 1f, Special.SHIFT))
+            }
+            pack.joiners.firstOrNull()?.let { joiner ->
+                third.add(KeySpec(pack.joinerLabel, 1f, text = joiner.toString(), specialStyle = true))
+            }
+            third.addAll(packKeyRow(pack, pack.rows[2]))
+            third.add(KeySpec(ICON_BACKSPACE, 1f, Special.BACKSPACE))
+        }
+        return listOf(
+            packKeyRow(pack, pack.rows[0]),
+            packKeyRow(pack, pack.rows[1]),
+            third
+        )
+    }
+
+    private fun addSplitPackRow(
+        parent: LinearLayout,
+        columns: List<KeySpec>,
+        center: List<KeySpec>,
+        halfColumns: Int,
+        heightDp: Int
+    ) {
+        val split = LanguagePackLayout.splitIndex(columns.size, halfColumns)
+        val left = columns.take(split).toMutableList()
+        val right = columns.drop(split).toMutableList()
+        val leftSlack = halfColumns - left.size
+        val rightSlack = halfColumns - right.size
+        if (leftSlack > 0) left.add(KeySpec("", leftSlack.toFloat(), Special.SPACER))
+        if (rightSlack > 0) right.add(0, KeySpec("", rightSlack.toFloat(), Special.SPACER))
+        addSplitKeyRow(
+            parent = parent,
+            left = left,
+            center = center,
+            right = right,
+            heightDp = heightDp,
+            leftWeight = halfColumns.toFloat(),
+            centerWeight = 2.4f,
+            rightWeight = halfColumns.toFloat()
+        )
+    }
+
     private fun addSplitSymbolRows(parent: LinearLayout, keyHeight: Int, bottomHeight: Int) {
         val first = symbolRowOne()
         val second = symbolRowTwo()
@@ -1160,14 +1338,15 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun portraitSpecialKeyRow(): List<KeySpec> {
-        return listOf(
-            KeySpec(ICON_ESCAPE, 1f, keyCode = KeyEvent.KEYCODE_ESCAPE, specialStyle = true),
-            KeySpec(ICON_TAB, 1f, keyCode = KeyEvent.KEYCODE_TAB, specialStyle = true),
-            KeySpec("CTRL", 1f, Special.CTRL, specialStyle = true),
-            KeySpec("ALT", 1f, Special.ALT, specialStyle = true),
-            KeySpec("SUPER", 1.15f, Special.SUPER, specialStyle = true),
-            KeySpec("DEL", 1f, Special.FORWARD_DELETE, specialStyle = true)
-        )
+        val out = mutableListOf<KeySpec>()
+        detachedShiftKey(1f)?.let(out::add)
+        out.add(KeySpec(ICON_ESCAPE, 1f, keyCode = KeyEvent.KEYCODE_ESCAPE, specialStyle = true))
+        out.add(KeySpec(ICON_TAB, 1f, keyCode = KeyEvent.KEYCODE_TAB, specialStyle = true))
+        out.add(KeySpec("CTRL", 1f, Special.CTRL, specialStyle = true))
+        out.add(KeySpec("ALT", 1f, Special.ALT, specialStyle = true))
+        out.add(KeySpec("SUPER", 1.15f, Special.SUPER, specialStyle = true))
+        out.add(KeySpec("DEL", 1f, Special.FORWARD_DELETE, specialStyle = true))
+        return out
     }
 
     private fun addSplitBottomRow(parent: LinearLayout, heightDp: Int) {
@@ -1176,16 +1355,19 @@ class RetuiKeyboardService : InputMethodService() {
         right.add(enterKey(1.35f))
         val left = mutableListOf(KeySpec(if (symbols) "ABC" else "123", 1.2f, Special.SYMBOLS))
         languageSwitchKey()?.let(left::add)
+        val strayShift = detachedShiftKey(1f)
+        strayShift?.let(left::add)
         left.add(commaKey(0.8f))
+        val leftWeight = if (strayShift == null) 2.6f else 3.4f
         addSplitKeyRow(
             parent = parent,
             left = left,
-            center = listOf(KeySpec("SPACE", 1f, Special.SPACE)),
+            center = listOf(KeySpec(activeLanguagePack?.spaceLabel ?: "SPACE", 1f, Special.SPACE)),
             right = right,
             heightDp = heightDp,
-            leftWeight = 2.6f,
-            centerWeight = 5.2f,
-            rightWeight = 2.6f
+            leftWeight = leftWeight,
+            centerWeight = 10.4f - 2f * leftWeight,
+            rightWeight = leftWeight
         )
     }
 
@@ -1267,11 +1449,14 @@ class RetuiKeyboardService : InputMethodService() {
         val hasLanguageSwitch = installedLanguagePacks.isNotEmpty()
         val out = mutableListOf(KeySpec(if (symbols) "ABC" else "123", 1.2f, Special.SYMBOLS))
         languageSwitchKey()?.let(out::add)
+        val strayShift = if (specialKeyRowVisible()) null else detachedShiftKey(1.1f)
+        strayShift?.let(out::add)
         out.add(commaKey(0.75f))
         out.add(
             KeySpec(
                 activeLanguagePack?.spaceLabel ?: "SPACE",
-                if (hasLanguageSwitch) 4.1f else if (layout.quickPeriod) 4.8f else 5.55f,
+                (if (hasLanguageSwitch) 4.1f else if (layout.quickPeriod) 4.8f else 5.55f) -
+                    (strayShift?.weight ?: 0f),
                 Special.SPACE
             )
         )
@@ -3096,7 +3281,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun smartSentenceCommitText(value: String): String? {
-        if (!shouldApplyEnglishTypingAssist() || hasLatchedModifiers()) return null
+        if (!shouldApplyTypingAssist() || hasLatchedModifiers()) return null
         val punctuation = value.singleOrNull() ?: return null
         if (!isSentenceTerminal(punctuation)) return null
         val before = currentInputConnection?.getTextBeforeCursor(SENTENCE_CONTEXT_CHARS, 0)?.toString() ?: return null
@@ -3105,13 +3290,14 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun shouldArmSentenceShiftAfterManualSpace(value: String): Boolean {
-        if (value != " " || !shouldApplyEnglishTypingAssist() || hasLatchedModifiers()) return false
+        if (value != " " || !shouldApplyTypingAssist() || hasLatchedModifiers()) return false
         val before = currentInputConnection?.getTextBeforeCursor(SENTENCE_CONTEXT_CHARS, 0)?.toString() ?: return false
         return isSentenceBoundaryBeforeCursor(before)
     }
 
-    private fun shouldApplyEnglishTypingAssist(): Boolean {
-        if (activeLanguagePack != null) return false
+    private fun shouldApplyTypingAssist(): Boolean {
+        val pack = activeLanguagePack
+        if (pack != null && !pack.bicameral) return false
         if (!layout.doubleSpacePeriod) return false
         val info = currentInfo
         if (usesNumberPad(info)) return false
@@ -3163,7 +3349,10 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun isSentenceTerminal(char: Char): Boolean {
-        return char == '.' || char == '!' || char == '?'
+        if (char == '.' || char == '!' || char == '?') return true
+        val pack = activeLanguagePack ?: return false
+        val value = char.toString()
+        return value == pack.period || value == pack.questionMark
     }
 
     private fun isSentenceClosingChar(char: Char): Boolean {
@@ -3188,11 +3377,12 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun applyActiveWordCasing(word: String): String {
-        if (activeLanguagePack != null) return word
+        val pack = activeLanguagePack
+        if (pack != null && !pack.bicameral) return word
         return when {
-            capsLocked -> word.uppercase()
+            capsLocked -> if (pack == null) word.uppercase() else word.uppercase(pack.locale)
             shifted -> word.replaceFirstChar { char ->
-                if (char.isLowerCase()) char.titlecase() else char.toString()
+                if (char.isLowerCase()) titlecaseForActiveLanguage(char) else char.toString()
             }
             else -> word
         }
@@ -3260,7 +3450,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun armShiftForEmptyInputIfNeeded(): Boolean {
-        if (!shouldApplyEnglishTypingAssist() || hasLatchedModifiers() || shifted || capsLocked) return false
+        if (!shouldApplyTypingAssist() || hasLatchedModifiers() || shifted || capsLocked) return false
         if (!isCurrentInputEmpty()) return false
         shifted = true
         lastShiftTapAtMs = 0L
@@ -3268,12 +3458,17 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun initialFieldCasedText(value: String): String {
-        if (!shouldApplyEnglishTypingAssist() || hasLatchedModifiers()) return value
+        if (!shouldApplyTypingAssist() || hasLatchedModifiers()) return value
         if (value.length != 1 || !value.first().isLetter()) return value
         if (!isCurrentInputEmpty()) return value
         return value.replaceFirstChar { char ->
-            if (char.isLowerCase()) char.titlecase() else char.toString()
+            if (char.isLowerCase()) titlecaseForActiveLanguage(char) else char.toString()
         }
+    }
+
+    private fun titlecaseForActiveLanguage(char: Char): String {
+        val locale = activeLanguagePack?.locale ?: return char.titlecase()
+        return char.titlecase(locale)
     }
 
     private fun isCurrentInputEmpty(): Boolean {

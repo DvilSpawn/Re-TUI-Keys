@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "id": "lt-LT",
+  "languageTag": "lt-LT",
+  "name": "Lithuanian",
+  "nativeName": "Lietuvių",
+  "switchLabel": "LT",
+  "version": 1,
+  "direction": "ltr",
+  "casing": "lower",
+  "rowStyle": "grid",
+  "rows": [
+    ["w", "ū", "ė", "y", "o", "q", "j", "n", "k", "g", "b", "c"],
+    ["f", "u", "e", "i", "a", "h", "l", "r", "t", "s", "p", "ž"],
+    ["ų", "ę", "į", "ą", "x", "v", "m", "d", "š", "č", "z"]
+  ],
+  "comma": ",",
+  "period": ".",
+  "questionMark": "?",
+  "spaceLabel": "TARPAS"
+}
