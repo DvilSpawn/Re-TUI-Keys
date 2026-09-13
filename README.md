@@ -122,6 +122,11 @@ terminal theme defaults.
 
 ## Building
 
+Install Android SDK 36 and set `ANDROID_HOME` (or `sdk.dir` in
+`local.properties`) to your SDK location. The real Launcher visual contract is
+included in `retui-contract/`; no Launcher checkout or private repository is
+required.
+
 ```bash
 ./gradlew assembleDebug
 ```
