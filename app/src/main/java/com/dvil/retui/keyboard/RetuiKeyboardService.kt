@@ -131,6 +131,8 @@ class RetuiKeyboardService : InputMethodService() {
     private var suggestionStrip: LinearLayout? = null
     private var pendingAddWord: String? = null
     private var localWordBeforeCursor = ""
+    private val tapObservations = mutableListOf<TapSample>()
+    private val tapKeyCenters = mutableMapOf<Char, GlidePoint>()
     private val glideKeyHits = mutableListOf<GlideKeyHit>()
     private var glideTrailView: GlideTrailView? = null
     private var emojiMode = false
@@ -308,6 +310,7 @@ class RetuiKeyboardService : InputMethodService() {
         suggestionStrip = null
         voiceButton = null
         glideKeyHits.clear()
+        tapKeyCenters.clear()
         glideTrailView = null
         return if (isLandscape()) buildLandscapeKeyboard() else buildPortraitKeyboard()
     }
@@ -743,7 +746,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun glideLayer(main: LinearLayout): View {
-        if (!layout.glideTyping || activeLanguagePack != null || isLandscape() || symbols || usesNumberPad()) return main
+        if (!layout.glideTyping || isLandscape() || symbols || usesNumberPad()) return main
         val frame = GlideLayerFrame(this)
         frame.addView(main, FrameLayout.LayoutParams(-1, -2))
         glideTrailView = GlideTrailView(this, theme.border, resources.displayMetrics.density).also { trail ->
@@ -912,12 +915,29 @@ class RetuiKeyboardService : InputMethodService() {
                 }
                 SuggestionAction.COMMIT -> commitSuggestion(chip.word)
                 SuggestionAction.COMMIT_NEXT_WORD -> commitNextWordAfterActive(chip.word)
+                SuggestionAction.COMMIT_FIELD_COMPLETION -> commitFieldCompletion(chip.word)
             }
         })
     }
 
     private fun suggestionChips(): List<SuggestionChip> {
+        val fieldToken = currentFieldTokenBeforeCursor()
+        val fieldKind = fieldCompletionKind()
+        if (fieldKind != null) {
+            val completions = LocalDictionary.suggestFieldCompletions(fieldToken, fieldKind, 5)
+            if (completions.isNotEmpty()) {
+                return completions.map { completion ->
+                    SuggestionChip(
+                        label = fieldCompletionLabel(fieldToken, completion),
+                        word = completion,
+                        action = SuggestionAction.COMMIT_FIELD_COMPLETION,
+                        weight = 1f
+                    )
+                }
+            }
+        }
         val currentWord = currentWordBeforeCursor()
+        val tapPoints = tapPointsForCurrentWord()
         val out = mutableListOf<SuggestionChip>()
         val hasActiveWord = currentWord.any(::isWordChar)
         val normalized = activeNormalizeWord(currentWord)
@@ -926,7 +946,7 @@ class RetuiKeyboardService : InputMethodService() {
             pendingAddWord = null
             if (normalized != null && activeContainsKnownWord(normalized)) {
                 val seen = HashSet<String>()
-                activeSuggestCurrentWordAlternatives(currentWord, 3).forEach { suggestion ->
+                activeSuggestCurrentWordAlternatives(currentWord, 3, tapPoints).forEach { suggestion ->
                     val key = activeNormalizeWord(suggestion) ?: suggestion.lowercase()
                     if (seen.add("current:$key")) {
                         out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
@@ -940,14 +960,14 @@ class RetuiKeyboardService : InputMethodService() {
                         }
                     }
                 }
-                activeSuggestNextWords(normalized, 2).forEach { suggestion ->
+                activeSuggestNextWords(normalized, 2, previousWordsBeforeCursor(3)).forEach { suggestion ->
                     val key = activeNormalizeWord(suggestion) ?: suggestion.lowercase()
                     if (seen.add("next:$key")) {
                         out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT_NEXT_WORD, 1f))
                     }
                 }
             } else {
-                val suggestions = activeSuggest(currentWord, 5)
+                val suggestions = activeSuggest(currentWord, 5, tapPoints)
                 suggestions.forEach { suggestion ->
                     out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
                 }
@@ -966,7 +986,7 @@ class RetuiKeyboardService : InputMethodService() {
             if (pending != null && !activeContainsKnownWord(pending)) {
                 out.add(SuggestionChip("+ ${activeDisplayWord(pending)}", pending, SuggestionAction.ADD_WORD, 1.15f))
             } else {
-                activeSuggestNextWords(previousWordBeforeCursor(), 5).forEach { suggestion ->
+                activeSuggestNextWords(previousWordBeforeCursor(), 5, previousWordsBeforeCursor(3)).forEach { suggestion ->
                     out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
                 }
             }
@@ -1567,13 +1587,15 @@ class RetuiKeyboardService : InputMethodService() {
                 },
                 active = isSpecialKeyActive(key.special),
                 specialStyle = key.specialStyle,
-                previewLabel = tapPreviewLabel(key)
+                previewLabel = tapPreviewLabel(key),
+                tapKey = key
             )
         }
 
         val view = FrameLayout(this)
         view.background = keyBackground(active = false)
         bindLongPressKey(view, key)
+        registerTapKey(view, key)
         registerGlideKey(view, key)
 
         view.addView(longPressLabelGroup(key), FrameLayout.LayoutParams(-2, -1, Gravity.CENTER))
@@ -1601,8 +1623,8 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun canGlideFromKey(key: KeySpec): Boolean {
         val text = key.text ?: return false
+        // ponytail: single-character keys keep the trace model small; multi-character pack keys stay tap-only.
         return layout.glideTyping &&
-            activeLanguagePack == null &&
             !isLandscape() &&
             !symbols &&
             !usesNumberPad() &&
@@ -1634,6 +1656,19 @@ class RetuiKeyboardService : InputMethodService() {
         }
     }
 
+    private fun registerTapKey(view: View, key: KeySpec) {
+        val char = key.text?.singleOrNull()?.lowercaseChar() ?: return
+        if (!char.isLetter()) return
+        view.addOnLayoutChangeListener { target, _, _, _, _, _, _, _, _ ->
+            val location = IntArray(2)
+            target.getLocationOnScreen(location)
+            tapKeyCenters[char] = GlidePoint(
+                location[0] + (target.width / 2f),
+                location[1] + (target.height / 2f)
+            )
+        }
+    }
+
     private fun longPressLabelGroup(key: KeySpec): LinearLayout {
         val group = LinearLayout(this)
         group.orientation = LinearLayout.HORIZONTAL
@@ -1660,7 +1695,7 @@ class RetuiKeyboardService : InputMethodService() {
         val view = View(this)
         view.background = ColorDrawable(Color.TRANSPARENT)
         view.contentDescription = key.text ?: key.label
-        bindImmediateKey(view, action = { handleKey(key) })
+        bindImmediateKey(view, action = { handleKey(key) }, tapKey = key)
         return view
     }
 
@@ -1680,12 +1715,13 @@ class RetuiKeyboardService : InputMethodService() {
         repeatAction: (() -> Unit)? = null,
         active: Boolean = false,
         specialStyle: Boolean = false,
-        previewLabel: String? = null
+        previewLabel: String? = null,
+        tapKey: KeySpec? = null
     ): TextView {
         val view = keyLabel(label, Gravity.CENTER, keyTextSize(label))
         view.setTextColor(if (specialStyle) theme.specialKeyText else theme.keyText)
         view.background = if (specialStyle) specialKeyBackground(active) else keyBackground(active)
-        bindImmediateKey(view, action, repeatAction, previewLabel = previewLabel)
+        bindImmediateKey(view, action, repeatAction, previewLabel = previewLabel, tapKey = tapKey)
         return view
     }
 
@@ -1694,10 +1730,12 @@ class RetuiKeyboardService : InputMethodService() {
         action: () -> Unit,
         repeatAction: (() -> Unit)? = null,
         dismissEmojiOnDown: Boolean = true,
-        previewLabel: String? = null
+        previewLabel: String? = null,
+        tapKey: KeySpec? = null
     ) {
         view.isClickable = true
         view.isFocusable = false
+        tapKey?.let { registerTapKey(view, it) }
         var popup: PopupWindow? = null
         fun clearPopup() {
             popup?.dismiss()
@@ -1712,6 +1750,7 @@ class RetuiKeyboardService : InputMethodService() {
                     pressFeedback(touched)
                     if (dismissEmojiOnDown && emojiMode) closeEmojiMode()
                     if (dismissEmojiOnDown && clipboardMode) closeClipboardMode()
+                    tapKey?.let { recordTapObservation(it, event.rawX, event.rawY) }
                     action()
                     repeatAction?.let { startRepeat(it) }
                     true
@@ -1987,6 +2026,9 @@ class RetuiKeyboardService : InputMethodService() {
                             clearPopup()
                             refreshSuggestionStripSoon()
                         }
+                        if (!longPressHandled && selectedChoice == null) {
+                            recordTapObservation(key, event.rawX, event.rawY)
+                        }
                         true
                     }
                 }
@@ -2166,17 +2208,26 @@ class RetuiKeyboardService : InputMethodService() {
             return
         }
         val rawTrace = trace.joinToString(separator = "")
-        val keyCenters = glideKeyCenters()
+        val pack = activeLanguagePack
+        val keyCenters = if (pack == null) {
+            LocalDictionary.applyTapOffsets(prefs, glideKeyCenters())
+        } else {
+            glideKeyCenters()
+        }
         val contextWords = previousWordsBeforeCursor(3)
-        val geometryCandidates = LocalDictionary.suggestGlideGeometry(
-            prefs = prefs,
-            points = points,
-            keyCenters = keyCenters,
-            rawTrace = rawTrace,
-            limit = 5,
-            previousWords = contextWords
-        )
-        val traceCandidates = if (rawTrace.length <= 5) {
+        val geometryCandidates = if (pack == null) {
+            LocalDictionary.suggestGlideGeometry(
+                prefs = prefs,
+                points = points,
+                keyCenters = keyCenters,
+                rawTrace = rawTrace,
+                limit = 5,
+                previousWords = contextWords
+            )
+        } else {
+            LanguagePackDictionary.suggestGlideGeometry(pack, prefs, points, keyCenters, rawTrace, 5)
+        }
+        val traceCandidates = if (pack == null && geometryCandidates.isEmpty()) {
             LocalDictionary.suggestGlide(prefs, rawTrace, 5)
         } else {
             emptyList()
@@ -2190,7 +2241,7 @@ class RetuiKeyboardService : InputMethodService() {
         }
         val commitValue = suggestion
             ?.takeIf { it.isNotBlank() }
-            ?.lowercase()
+            ?.let { activeNormalizeWord(it) ?: it }
             ?: fallbackTrace.takeIf { it.length in 2..3 }
         if (commitValue.isNullOrBlank()) {
             recordGlideDiagnostics(
@@ -2210,8 +2261,9 @@ class RetuiKeyboardService : InputMethodService() {
         currentInputConnection?.commitText("$casedCommitValue ", 1)
         localWordBeforeCursor = ""
         pendingAddWord = null
+        tapObservations.clear()
         if (!suggestion.isNullOrBlank()) {
-            LocalDictionary.recordAcceptedWord(prefs, suggestion)
+            activeRecordAcceptedWord(suggestion, contextWords)
         }
         recordGlideDiagnostics(
             rawTrace = rawTrace,
@@ -2318,6 +2370,26 @@ class RetuiKeyboardService : InputMethodService() {
     private fun finishGlideTrail() {
         val trail = glideTrailView ?: return
         repeatHandler.postDelayed({ trail.clear() }, GLIDE_TRAIL_HOLD_MS)
+    }
+
+    private fun recordTapObservation(key: KeySpec, rawX: Float, rawY: Float) {
+        val char = key.text?.singleOrNull()?.lowercaseChar() ?: return
+        if (!char.isLetter() || activeLanguagePack != null || !shouldOfferSuggestions() || hasLatchedModifiers()) return
+        tapObservations += TapSample(char, GlidePoint(rawX, rawY))
+        while (tapObservations.size > MAX_TAP_OBSERVATIONS) {
+            tapObservations.removeAt(0)
+        }
+    }
+
+    private fun tapPointsForCurrentWord(): List<GlidePoint> {
+        val word = currentWordBeforeCursor()
+        if (word.isBlank() || tapObservations.size != word.length) return emptyList()
+        return tapObservations.map(TapSample::point)
+    }
+
+    private fun learnTapOffsetsForCurrentWord() {
+        if (tapObservations.isEmpty()) return
+        LocalDictionary.recordTapOffsets(prefs, tapObservations, tapKeyCenters)
     }
 
     private fun clearGlideTrail() {
@@ -3070,10 +3142,16 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun commitFromKey(value: String) {
         val finishedWord = if (isWordBoundary(value)) currentWordBeforeCursor() else null
+        val finishedWordContext = if (finishedWord != null) previousWordsBeforeCurrentWord(3) else emptyList()
         smartSentenceCommitText(value)?.let { smartValue ->
             commit(smartValue)
             trackCommittedText(smartValue)
             learnFinishedWord(finishedWord)
+            activeRecordAcceptedContext(finishedWord, finishedWordContext)
+            if (finishedWord != null) {
+                learnTapOffsetsForCurrentWord()
+                tapObservations.clear()
+            }
             armSentenceShift()
             return
         }
@@ -3084,6 +3162,11 @@ class RetuiKeyboardService : InputMethodService() {
         }
         trackCommittedText(commitValue)
         learnFinishedWord(finishedWord)
+        activeRecordAcceptedContext(finishedWord, finishedWordContext)
+        if (finishedWord != null) {
+            learnTapOffsetsForCurrentWord()
+            tapObservations.clear()
+        }
         if (armShiftAfterSpace) {
             armSentenceShift()
         } else if (shifted && !capsLocked) {
@@ -3201,13 +3284,16 @@ class RetuiKeyboardService : InputMethodService() {
     private fun commitSuggestion(word: String) {
         val ic = currentInputConnection ?: return
         val currentWord = currentWordBeforeCursorContext()
+        val previousWords = previousWordsBeforeCurrentWord(3)
         if (currentWord.value.isNotEmpty() && !currentWord.fromLocalFallback) {
             ic.deleteSurroundingText(currentWord.value.length, 0)
         }
         ic.commitText(suggestionCommitText(applyActiveWordCasing(word), currentWord), 1)
+        learnTapOffsetsForCurrentWord()
         pendingAddWord = null
         localWordBeforeCursor = ""
-        activeRecordAcceptedWord(word)
+        tapObservations.clear()
+        activeRecordAcceptedWord(word, previousWords)
         if (shifted && !capsLocked) {
             shifted = false
             lastShiftTapAtMs = 0L
@@ -3217,14 +3303,31 @@ class RetuiKeyboardService : InputMethodService() {
         }
     }
 
+    private fun commitFieldCompletion(completion: String) {
+        val ic = currentInputConnection ?: return
+        val token = currentFieldTokenBeforeCursor()
+        if (token.isNotEmpty()) ic.deleteSurroundingText(token.length, 0)
+        ic.commitText(completion, 1)
+        pendingAddWord = null
+        localWordBeforeCursor = ""
+        tapObservations.clear()
+        refreshSuggestionStripSoon()
+    }
+
     private fun commitNextWordAfterActive(word: String) {
         val normalized = activeNormalizeWord(word) ?: return
         val ic = currentInputConnection ?: return
-        learnFinishedWord(currentWordBeforeCursor())
+        val currentWord = currentWordBeforeCursor()
+        val currentWordContext = previousWordsBeforeCurrentWord(3)
+        learnFinishedWord(currentWord)
+        activeRecordAcceptedContext(currentWord, currentWordContext)
+        learnTapOffsetsForCurrentWord()
+        val nextWordContext = previousWordsBeforeCursor(3)
         ic.commitText(" ${activeDisplayWord(normalized)} ", 1)
         pendingAddWord = null
         localWordBeforeCursor = ""
-        activeRecordAcceptedWord(normalized)
+        tapObservations.clear()
+        activeRecordAcceptedWord(normalized, nextWordContext)
         if (shifted && !capsLocked) {
             shifted = false
             lastShiftTapAtMs = 0L
@@ -3322,6 +3425,7 @@ class RetuiKeyboardService : InputMethodService() {
         if (!selected.isNullOrEmpty()) {
             ic.commitText("", 1)
             localWordBeforeCursor = ""
+            tapObservations.clear()
         } else {
             if (layout.deleteWholeWord && deleteWordBeforeCursor(ic)) {
                 refreshSuggestionStripSoon()
@@ -3331,6 +3435,7 @@ class RetuiKeyboardService : InputMethodService() {
             if (localWordBeforeCursor.isNotEmpty()) {
                 localWordBeforeCursor = localWordBeforeCursor.dropLast(1)
             }
+            if (tapObservations.isNotEmpty()) tapObservations.removeAt(tapObservations.lastIndex)
         }
         refreshSuggestionStripSoon()
     }
@@ -3351,6 +3456,7 @@ class RetuiKeyboardService : InputMethodService() {
         if (deleteCount <= 0) return false
         ic.deleteSurroundingText(deleteCount, 0)
         localWordBeforeCursor = ""
+        tapObservations.clear()
         return true
     }
 
@@ -3360,7 +3466,10 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun enter() {
         val ic = currentInputConnection ?: return
-        learnFinishedWord(currentWordBeforeCursor())
+        val finishedWord = currentWordBeforeCursor()
+        val finishedWordContext = previousWordsBeforeCurrentWord(3)
+        learnFinishedWord(finishedWord)
+        activeRecordAcceptedContext(finishedWord, finishedWordContext)
         localWordBeforeCursor = ""
         val action = currentImeAction()
         if (action != EditorInfo.IME_ACTION_NONE && action != EditorInfo.IME_ACTION_UNSPECIFIED) {
@@ -3501,6 +3610,30 @@ class RetuiKeyboardService : InputMethodService() {
         return currentWordBeforeCursorContext().value
     }
 
+    private fun currentFieldTokenBeforeCursor(): String {
+        val text = currentInputConnection?.getTextBeforeCursor(128, 0)?.toString() ?: return ""
+        if (text.isEmpty()) return ""
+        var start = text.length
+        while (start > 0 && !text[start - 1].isWhitespace()) {
+            start--
+        }
+        return text.substring(start)
+    }
+
+    private fun fieldCompletionKind(): FieldCompletionKind? {
+        val info = currentInfo ?: return null
+        if (isPasswordField(info)) return null
+        return fieldCompletionKindForInputType(info.inputType)
+    }
+
+    private fun fieldCompletionLabel(token: String, completion: String): String {
+        return if (completion.startsWith(token, ignoreCase = true)) {
+            completion.substring(token.length).ifBlank { completion }
+        } else {
+            completion
+        }
+    }
+
     private fun currentWordBeforeCursorContext(): CursorWord {
         val text = currentInputConnection?.getTextBeforeCursor(64, 0)?.toString()
             ?: return CursorWord(localWordBeforeCursor, fromLocalFallback = localWordBeforeCursor.isNotEmpty())
@@ -3551,6 +3684,17 @@ class RetuiKeyboardService : InputMethodService() {
         return out.toList()
     }
 
+    private fun previousWordsBeforeCurrentWord(limit: Int): List<String> {
+        val current = activeNormalizeWord(currentWordBeforeCursor())
+        val words = previousWordsBeforeCursor((limit + 1).coerceAtMost(5))
+        if (current == null) return words.takeLast(limit.coerceAtLeast(1))
+        return if (words.lastOrNull()?.let { activeNormalizeWord(it) } == current) {
+            words.dropLast(1).takeLast(limit.coerceAtLeast(1))
+        } else {
+            words.takeLast(limit.coerceAtLeast(1))
+        }
+    }
+
     private fun trackCommittedText(value: String) {
         value.forEach { char ->
             localWordBeforeCursor = if (isWordChar(char)) {
@@ -3591,26 +3735,58 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun activeSuggest(prefix: String, limit: Int): List<String> {
+        return activeSuggest(prefix, limit, emptyList())
+    }
+
+    private fun activeSuggest(prefix: String, limit: Int, tapPoints: List<GlidePoint>): List<String> {
         val pack = activeLanguagePack
         return if (pack == null) {
-            LocalDictionary.suggest(prefs, prefix, limit)
+            LocalDictionary.suggest(
+                prefs,
+                prefix,
+                limit,
+                tapPoints,
+                LocalDictionary.applyTapOffsets(prefs, tapKeyCenters)
+            )
         } else {
             LanguagePackDictionary.suggest(pack, prefs, prefix, limit)
         }
     }
 
     private fun activeSuggestCurrentWordAlternatives(word: String, limit: Int): List<String> {
+        return activeSuggestCurrentWordAlternatives(word, limit, emptyList())
+    }
+
+    private fun activeSuggestCurrentWordAlternatives(
+        word: String,
+        limit: Int,
+        tapPoints: List<GlidePoint>
+    ): List<String> {
         val pack = activeLanguagePack
         return if (pack == null) {
-            LocalDictionary.suggestCurrentWordAlternatives(prefs, word, limit)
+            LocalDictionary.suggestCurrentWordAlternatives(
+                prefs,
+                word,
+                limit,
+                tapPoints,
+                LocalDictionary.applyTapOffsets(prefs, tapKeyCenters)
+            )
         } else {
             LanguagePackDictionary.suggestCurrentWordAlternatives(pack, prefs, word, limit)
         }
     }
 
     private fun activeSuggestNextWords(previousWord: String?, limit: Int): List<String> {
+        return activeSuggestNextWords(previousWord, limit, emptyList())
+    }
+
+    private fun activeSuggestNextWords(
+        previousWord: String?,
+        limit: Int,
+        previousWords: List<String>
+    ): List<String> {
         return if (activeLanguagePack == null) {
-            LocalDictionary.suggestNextWords(prefs, previousWord, limit)
+            LocalDictionary.suggestNextWords(prefs, previousWord, limit, previousWords)
         } else {
             emptyList()
         }
@@ -3625,12 +3801,18 @@ class RetuiKeyboardService : InputMethodService() {
         }
     }
 
-    private fun activeRecordAcceptedWord(word: String) {
+    private fun activeRecordAcceptedWord(word: String, previousWords: List<String> = emptyList()) {
         val pack = activeLanguagePack
         if (pack == null) {
-            LocalDictionary.recordAcceptedWord(prefs, word)
+            LocalDictionary.recordAcceptedWord(prefs, word, previousWords)
         } else {
             LanguagePackDictionary.recordAcceptedWord(pack, prefs, word)
+        }
+    }
+
+    private fun activeRecordAcceptedContext(word: String?, previousWords: List<String>) {
+        if (activeLanguagePack == null && !word.isNullOrBlank()) {
+            LocalDictionary.recordAcceptedContext(prefs, word, previousWords)
         }
     }
 
@@ -3660,6 +3842,7 @@ class RetuiKeyboardService : InputMethodService() {
         lastShiftTapAtMs = 0L
         pendingAddWord = null
         localWordBeforeCursor = ""
+        tapObservations.clear()
     }
 
     private fun applyPrivateImeOptions(raw: String?) {
@@ -4065,6 +4248,7 @@ class RetuiKeyboardService : InputMethodService() {
             strokeJoin = Paint.Join.ROUND
             color = withAlpha(strokeColor, 230)
         }
+        private val maxLengthPx = 260f * density
 
         fun beginRaw(rawX: Float, rawY: Float) {
             points.clear()
@@ -4107,7 +4291,17 @@ class RetuiKeyboardService : InputMethodService() {
                 if ((dx * dx) + (dy * dy) < 16f) return
             }
             points.add(GlideTrailPoint(x, y))
+            // ponytail: bounded visual tail; the decoder retains the full gesture path.
+            while (points.size > 2 && trailLength() > maxLengthPx) points.removeAt(0)
             invalidate()
+        }
+
+        private fun trailLength(): Float {
+            return points.zipWithNext().sumOf { (left, right) ->
+                val dx = left.x - right.x
+                val dy = left.y - right.y
+                kotlin.math.sqrt((dx * dx) + (dy * dy)).toDouble()
+            }.toFloat()
         }
 
         private fun withAlpha(color: Int, alpha: Int): Int {
@@ -4157,7 +4351,8 @@ class RetuiKeyboardService : InputMethodService() {
     private enum class SuggestionAction {
         ADD_WORD,
         COMMIT,
-        COMMIT_NEXT_WORD
+        COMMIT_NEXT_WORD,
+        COMMIT_FIELD_COMPLETION
     }
 
     private enum class Special {
@@ -4465,9 +4660,10 @@ class RetuiKeyboardService : InputMethodService() {
         private const val REPEAT_INTERVAL_MS = 42L
         private const val DIRECTION_REPEAT_INITIAL_DELAY_MS = 360L
         private const val SHIFT_DOUBLE_TAP_MS = 360L
-        private const val GLIDE_TRAIL_HOLD_MS = 180L
+        private const val GLIDE_TRAIL_HOLD_MS = 100L
         private const val KEY_PREVIEW_TIMEOUT_MS = 700L
         private const val ACTIVE_ADD_WORD_MIN_LENGTH = 4
+        private const val MAX_TAP_OBSERVATIONS = 32
         private const val SENTENCE_CONTEXT_CHARS = 128
         private const val NAV_MODE_GESTURAL = 2
         private const val ICON_BACKSPACE = "⌫"
@@ -4490,5 +4686,14 @@ class RetuiKeyboardService : InputMethodService() {
         private const val ICON_SHIFT = "⇧"
         private const val ICON_TAB = "TAB"
         private const val ICON_UP = "↑"
+    }
+}
+
+internal fun fieldCompletionKindForInputType(inputType: Int): FieldCompletionKind? {
+    return when (inputType and InputType.TYPE_MASK_VARIATION) {
+        InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+        InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS -> FieldCompletionKind.EMAIL
+        InputType.TYPE_TEXT_VARIATION_URI -> FieldCompletionKind.URL
+        else -> null
     }
 }

@@ -398,6 +398,138 @@ class LocalDictionaryGlideTest {
         assertEquals(listOf("you", "know"), LocalDictionary.suggestNextWords(prefs, "will", 2))
     }
 
+    @Test
+    fun acceptedWordsLearnBigramAndTrigramNextWords() {
+        val prefs = prefsWithWords("alpha", "beta", "gamma")
+
+        LocalDictionary.recordAcceptedWord(prefs, "beta", listOf("alpha"))
+        LocalDictionary.recordAcceptedWord(prefs, "gamma", listOf("alpha", "beta"))
+
+        assertEquals("beta", LocalDictionary.suggestNextWords(prefs, "alpha", 3).firstOrNull())
+        assertEquals(
+            "gamma",
+            LocalDictionary.suggestNextWords(prefs, "beta", 3, listOf("alpha", "beta")).firstOrNull()
+        )
+    }
+
+    @Test
+    fun emailFieldCompletionsPreserveLocalPart() {
+        assertEquals(
+            "name@gmail.com",
+            LocalDictionary.suggestFieldCompletions("name@gm", FieldCompletionKind.EMAIL, 5).firstOrNull()
+        )
+        assertEquals(
+            "name@gmail.com",
+            LocalDictionary.suggestFieldCompletions("name@", FieldCompletionKind.EMAIL, 5).firstOrNull()
+        )
+    }
+
+    @Test
+    fun urlFieldCompletionsOfferCommonSuffixes() {
+        assertEquals(
+            "example.com",
+            LocalDictionary.suggestFieldCompletions("example", FieldCompletionKind.URL, 5).firstOrNull()
+        )
+        assertEquals(
+            "example.com",
+            LocalDictionary.suggestFieldCompletions("example.c", FieldCompletionKind.URL, 5).firstOrNull()
+        )
+    }
+
+    @Test
+    fun typedCorrectionPrefersNearbyQwertyKey() {
+        val prefs = prefsWithWords("zoll", "zall")
+        repeat(2) {
+            LocalDictionary.recordAcceptedWord(prefs, "zoll")
+            LocalDictionary.recordAcceptedWord(prefs, "zall")
+        }
+
+        assertEquals("zoll", LocalDictionary.suggest(prefs, "zill", 2).firstOrNull())
+    }
+
+    @Test
+    fun typedCorrectionUsesTapPosition() {
+        val prefs = prefsWithWords("zoll", "zall")
+        repeat(2) {
+            LocalDictionary.recordAcceptedWord(prefs, "zoll")
+            LocalDictionary.recordAcceptedWord(prefs, "zall")
+        }
+        val centers = qwertyCenters()
+        val taps = "zoll".map { centers.getValue(it) }
+
+        assertEquals(
+            "zoll",
+            LocalDictionary.suggest(prefs, "zill", 2, tapPoints = taps, keyCenters = centers).firstOrNull()
+        )
+    }
+
+    @Test
+    fun tapOffsetsLearnAndShiftKeyCenters() {
+        val prefs = FakeSharedPreferences()
+        val centers = qwertyCenters()
+        val o = centers.getValue('o')
+
+        LocalDictionary.recordTapOffsets(
+            prefs,
+            samples = listOf(
+                TapSample('o', GlidePoint(o.x - 20f, o.y)),
+                TapSample('o', GlidePoint(o.x - 10f, o.y))
+            ),
+            keyCenters = centers
+        )
+
+        assertTrue(LocalDictionary.applyTapOffsets(prefs, centers).getValue('o').x < o.x)
+    }
+
+    @Test
+    fun geometryGlideUsesLoopEvidenceForRepeatedLetter() {
+        val prefs = prefsWithWords("god")
+        val centers = qwertyCenters()
+        val o = centers.getValue('o')
+        val path = listOf(
+            centers.getValue('g'),
+            o,
+            GlidePoint(o.x + 28f, o.y + 12f),
+            GlidePoint(o.x - 22f, o.y + 10f),
+            o,
+            centers.getValue('d')
+        )
+
+        assertEquals("good", LocalDictionary.suggestGlideGeometry(prefs, path, centers, "god", 2).firstOrNull())
+    }
+
+    @Test
+    fun geometryGlideKeepsExactShortWord() {
+        val centers = qwertyCenters()
+        val path = listOf(centers.getValue('g'), centers.getValue('o'))
+
+        assertEquals(
+            "go",
+            LocalDictionary.suggestGlideGeometry(FakeSharedPreferences(), path, centers, "go", 2).firstOrNull()
+        )
+    }
+
+    @Test
+    fun geometryGlideKeepsExactLongWord() {
+        val prefs = prefsWithWords("wonderful")
+        val centers = qwertyCenters()
+        val path = "wonderful".map { centers.getValue(it) }
+
+        assertEquals(
+            "wonderful",
+            LocalDictionary.suggestGlideGeometry(prefs, path, centers, "wonderful", 2).firstOrNull()
+        )
+    }
+
+    @Test
+    fun glideTraceToleratesNeighborKeysOnLongWord() {
+        val prefs = prefsWithWords("wonderful")
+        val noisyTrace = "wertyuikjnjhgfderfgyuikl"
+
+        val suggestions = LocalDictionary.suggestGlide(prefs, noisyTrace, 2)
+        assertEquals("wonderful", suggestions.firstOrNull())
+    }
+
     @org.junit.Ignore("Calibration fixture from a real session; use for offline tuning, not as a release gate.")
     @Test
     fun geometryGlideRanksPulledPhraseSession() {

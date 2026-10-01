@@ -22,13 +22,19 @@ object LocalDictionary {
     private const val MAX_LATINIME_WORDS = 50_000
     private const val PREFIX_INDEX_DEPTH = 3
     private const val GLIDE_GEOMETRY_SAMPLES = 28
+    private const val KEY_TAP_OFFSETS_JSON = "typing.tapOffsets.v1"
+    private const val MAX_TAP_OFFSET_SAMPLES = 64
+    private const val MAX_TAP_OFFSET_NORMALIZED = 0.12f
+    private const val KEY_NGRAMS_JSON = "typing.ngrams.v1"
+    private const val MAX_NGRAM_ENTRIES = 512
+    private const val MAX_NGRAM_COUNT = 1_000
 
     private val builtInWords = listOf(
         "i", "hi", "the", "and", "you", "that", "have", "for", "not", "with", "this", "but", "from",
         "in", "of", "on", "at", "as", "is", "be", "by", "or", "if", "so", "up", "us",
         "they", "say", "her", "she", "will", "one", "all", "would", "there", "their",
         "what", "about", "which", "when", "make", "can", "like", "time", "just", "know",
-        "take", "people", "into", "year", "your", "good", "some", "could", "them", "see",
+        "take", "people", "into", "year", "your", "good", "go", "some", "could", "them", "see",
         "other", "than", "then", "now", "look", "only", "come", "its", "over", "think",
         "also", "back", "after", "use", "two", "how", "our", "work", "first", "well",
         "way", "even", "new", "want", "because", "any", "these", "give", "day", "most",
@@ -85,6 +91,10 @@ object LocalDictionary {
     @Volatile private var latinImeStaticIndex: StaticIndex? = null
     @Volatile private var cachedUserWordsRaw: String? = null
     @Volatile private var cachedUserWords: List<UserWordEntry> = emptyList()
+    @Volatile private var cachedTapOffsetsRaw: String? = null
+    @Volatile private var cachedTapOffsets: Map<Char, TapOffset> = emptyMap()
+    @Volatile private var cachedNgramsRaw: String? = null
+    @Volatile private var cachedNgrams: List<LearnedNgramEntry> = emptyList()
 
     private val contractionShortcuts = mapOf(
         "im" to "i'm",
@@ -201,7 +211,13 @@ object LocalDictionary {
         }
     }
 
-    fun suggest(prefs: SharedPreferences, rawPrefix: String, limit: Int): List<String> {
+    fun suggest(
+        prefs: SharedPreferences,
+        rawPrefix: String,
+        limit: Int,
+        tapPoints: List<GlidePoint> = emptyList(),
+        keyCenters: Map<Char, GlidePoint> = emptyMap()
+    ): List<String> {
         val safeLimit = limit.coerceIn(1, 8)
         val prefix = normalizeSearch(rawPrefix)
         if (prefix.isBlank()) return emptyList()
@@ -237,7 +253,7 @@ object LocalDictionary {
         }
 
         if (searchPrefix.length >= TYPO_MIN_LENGTH && ranked.size < safeLimit) {
-            addTypoCandidates(searchPrefix, userWords) { word, score -> offer(word, score) }
+            addTypoCandidates(searchPrefix, userWords, tapPoints, keyCenters) { word, score -> offer(word, score) }
         }
 
         return ranked.values
@@ -246,7 +262,13 @@ object LocalDictionary {
             .map { formatSuggestion(rawPrefix, it.word) }
     }
 
-    fun suggestCurrentWordAlternatives(prefs: SharedPreferences, rawWord: String, limit: Int): List<String> {
+    fun suggestCurrentWordAlternatives(
+        prefs: SharedPreferences,
+        rawWord: String,
+        limit: Int,
+        tapPoints: List<GlidePoint> = emptyList(),
+        keyCenters: Map<Char, GlidePoint> = emptyMap()
+    ): List<String> {
         val safeLimit = limit.coerceIn(1, 5)
         val word = normalizeWord(rawWord) ?: return emptyList()
         val searchWord = dictionarySearchKey(word)
@@ -264,7 +286,9 @@ object LocalDictionary {
             if (abs(searchCandidate.length - searchWord.length) > 1) return
             val distance = editDistanceAtMost(searchWord, searchCandidate, 1)
             if (distance !in 0..1) return
-            val adjustedScore = score - (distance * 32_000)
+            val adjustedScore = score - (distance * 32_000) +
+                keyboardProximityBonus(searchWord, searchCandidate) +
+                tapPositionBonus(searchWord, searchCandidate, tapPoints, keyCenters)
             val current = ranked[normalized]
             if (current == null || adjustedScore > current.score) {
                 ranked[normalized] = RankedCandidate(normalized, adjustedScore)
@@ -290,10 +314,66 @@ object LocalDictionary {
             .map { formatSuggestion(rawWord, it.word) }
     }
 
-    fun suggestNextWords(prefs: SharedPreferences, rawPreviousWord: String?, limit: Int): List<String> {
+    fun recordTapOffsets(
+        prefs: SharedPreferences,
+        samples: List<TapSample>,
+        keyCenters: Map<Char, GlidePoint>
+    ) {
+        if (samples.isEmpty() || keyCenters.size < 2) return
+        val diagonal = keyboardDiagonal(keyCenters.values).coerceAtLeast(1f)
+        val offsets = readTapOffsets(prefs).toMutableMap()
+        samples.forEach { sample ->
+            val center = keyCenters[sample.char] ?: return@forEach
+            val dx = ((sample.point.x - center.x) / diagonal).coerceIn(
+                -MAX_TAP_OFFSET_NORMALIZED,
+                MAX_TAP_OFFSET_NORMALIZED
+            )
+            val dy = ((sample.point.y - center.y) / diagonal).coerceIn(
+                -MAX_TAP_OFFSET_NORMALIZED,
+                MAX_TAP_OFFSET_NORMALIZED
+            )
+            val previous = offsets[sample.char]
+            val count = (previous?.samples ?: 0).coerceAtMost(MAX_TAP_OFFSET_SAMPLES - 1)
+            val nextCount = count + 1
+            val weight = 1f / nextCount
+            offsets[sample.char] = TapOffset(
+                x = if (previous == null) dx else previous.x + ((dx - previous.x) * weight),
+                y = if (previous == null) dy else previous.y + ((dy - previous.y) * weight),
+                samples = nextCount
+            )
+        }
+        writeTapOffsets(prefs, offsets)
+    }
+
+    fun applyTapOffsets(
+        prefs: SharedPreferences,
+        keyCenters: Map<Char, GlidePoint>
+    ): Map<Char, GlidePoint> {
+        val offsets = readTapOffsets(prefs)
+        if (offsets.isEmpty() || keyCenters.size < 2) return keyCenters
+        val diagonal = keyboardDiagonal(keyCenters.values).coerceAtLeast(1f)
+        return keyCenters.mapValues { (char, center) ->
+            val offset = offsets[char] ?: return@mapValues center
+            GlidePoint(
+                x = center.x + (offset.x * diagonal),
+                y = center.y + (offset.y * diagonal)
+            )
+        }
+    }
+
+    fun suggestNextWords(
+        prefs: SharedPreferences,
+        rawPreviousWord: String?,
+        limit: Int,
+        previousWords: List<String> = emptyList()
+    ): List<String> {
         val previous = normalizeWord(rawPreviousWord ?: return emptyList()) ?: return emptyList()
         val safeLimit = limit.coerceIn(1, 5)
         val ranked = LinkedHashMap<String, RankedCandidate>()
+        val context = normalizeContextWords(previousWords).let {
+            if (it.lastOrNull() == previous) it else (it + previous).takeLast(3)
+        }
+        val learnedNgrams = readLearnedNgrams(prefs)
 
         fun offer(word: String, score: Int) {
             val normalized = normalizeWord(word) ?: return
@@ -307,11 +387,24 @@ object LocalDictionary {
         staticBigrams[previous].orEmpty().forEachIndexed { index, word ->
             offer(word, 120_000 - (index * 6_000))
         }
+        learnedNgramCandidates(learnedNgrams, context).forEach { (word, score) ->
+            offer(word, score)
+        }
 
         return ranked.values
             .sortedWith(compareByDescending<RankedCandidate> { it.score }.thenBy { it.word })
             .take(safeLimit)
             .map { displayWord(it.word) }
+    }
+
+    fun suggestFieldCompletions(rawToken: String, kind: FieldCompletionKind, limit: Int): List<String> {
+        val token = rawToken.trim()
+        if (token.isEmpty() || token.any(Char::isWhitespace)) return emptyList()
+        val safeLimit = limit.coerceIn(1, 5)
+        return when (kind) {
+            FieldCompletionKind.EMAIL -> emailCompletions(token, safeLimit)
+            FieldCompletionKind.URL -> urlCompletions(token, safeLimit)
+        }
     }
 
     fun suggestGlide(prefs: SharedPreferences, rawTrace: String, limit: Int): List<String> {
@@ -362,11 +455,13 @@ object LocalDictionary {
         val startChar = nearestGlideChar(points.first(), keyCenters)
         val endChar = nearestGlideChar(points.last(), keyCenters)
         val context = normalizeContextWords(previousWords)
+        val learnedNgrams = readLearnedNgrams(prefs)
 
         fun offer(word: String, baseScore: Int) {
             val normalized = normalizeWord(word) ?: return
             val key = dictionarySearchKey(normalized)
-            val languageScore = offlineGlideLanguageModel.score(context, key)
+            val languageScore = offlineGlideLanguageModel.score(context, key) +
+                learnedNgramScore(learnedNgrams, context, key)
             if (
                 startChar != null &&
                 key.firstOrNull() != startChar &&
@@ -377,6 +472,7 @@ object LocalDictionary {
                 word = key,
                 baseScore = baseScore,
                 input = sampledInput,
+                rawPoints = points,
                 keyCenters = keyCenters,
                 diagonal = diagonal,
                 startChar = startChar,
@@ -404,6 +500,56 @@ object LocalDictionary {
             .map { displayWord(it.word) }
     }
 
+    internal fun rankGlideGeometry(
+        candidates: Sequence<Pair<String, Int>>,
+        points: List<GlidePoint>,
+        keyCenters: Map<Char, GlidePoint>,
+        rawTrace: String,
+        limit: Int,
+        normalize: (String) -> String?
+    ): List<String> {
+        val trace = compactGlideTrace(rawTrace)
+        if (trace.length < 2 || points.size < 2 || keyCenters.size < 2) return emptyList()
+        val safeLimit = limit.coerceIn(1, 5)
+        val sampledInput = resamplePath(points, GLIDE_GEOMETRY_SAMPLES)
+        val diagonal = keyboardDiagonal(keyCenters.values).coerceAtLeast(1f)
+        val startChar = nearestGlideChar(points.first(), keyCenters)
+        val endChar = nearestGlideChar(points.last(), keyCenters)
+        val ranked = LinkedHashMap<String, RankedCandidate>()
+
+        candidates.forEach { (rawWord, baseScore) ->
+            val word = normalize(rawWord) ?: return@forEach
+            if (word.length < 2 || word.firstOrNull() != startChar) return@forEach
+            val wordPath = word.mapNotNull { keyCenters[it] }
+            if (wordPath.size < 2) return@forEach
+            val sampledWord = resamplePath(wordPath, GLIDE_GEOMETRY_SAMPLES)
+            var sumDistance = 0f
+            sampledInput.indices.forEach { index ->
+                sumDistance += distance(sampledInput[index], sampledWord[index]) / diagonal
+            }
+            val meanDistance = sumDistance / sampledInput.size
+            val coverage = wordPath.count { distanceToPath(it, points) <= diagonal * 0.09f }
+            val minimumCoverage = if (word.length <= 4) minOf(word.length, 2) else maxOf(3, word.length - 2)
+            if (coverage < minimumCoverage) return@forEach
+            val travelMismatch = abs(pathLength(points) - pathLength(wordPath)) /
+                maxOf(pathLength(points), pathLength(wordPath), 1f)
+            var score = baseScore + (coverage * 38_000) +
+                ((1f - (meanDistance / 0.16f)).coerceIn(0f, 1f) * 460_000).toInt()
+            score += if (word == trace) 1_000_000 else 0
+            score += if (coverage == wordPath.size && meanDistance <= 0.06f) 560_000 else 0
+            score += if (endChar != null && word.last() == endChar) 90_000 else 0
+            score -= (meanDistance * 360_000).toInt()
+            score -= (travelMismatch.coerceIn(0f, 1f) * 180_000).toInt()
+            score -= minOf(abs(word.length - trace.length), 4) * 14_000
+            val current = ranked[word]
+            if (current == null || score > current.score) ranked[word] = RankedCandidate(word, score)
+        }
+        return ranked.values
+            .sortedWith(compareByDescending<RankedCandidate> { it.score }.thenBy { it.word })
+            .take(safeLimit)
+            .map { it.word }
+    }
+
     fun learnTypedWord(prefs: SharedPreferences, rawWord: String, force: Boolean = false): Boolean {
         val word = normalizeWord(rawWord) ?: return false
         val entries = readEntries(prefs).associateBy { it.word }.toMutableMap()
@@ -419,15 +565,26 @@ object LocalDictionary {
         return true
     }
 
-    fun recordAcceptedWord(prefs: SharedPreferences, rawWord: String) {
+    fun recordAcceptedWord(
+        prefs: SharedPreferences,
+        rawWord: String,
+        previousWords: List<String> = emptyList()
+    ) {
         val word = normalizeWord(rawWord) ?: return
         val entries = readEntries(prefs).associateBy { it.word }.toMutableMap()
-        val current = entries[word] ?: return
-        entries[word] = current.copy(
-            frequency = (current.frequency + 1).coerceAtMost(Int.MAX_VALUE),
-            lastUsedAt = System.currentTimeMillis()
-        )
-        writeEntries(prefs, entries.values)
+        entries[word]?.let { current ->
+            entries[word] = current.copy(
+                frequency = (current.frequency + 1).coerceAtMost(Int.MAX_VALUE),
+                lastUsedAt = System.currentTimeMillis()
+            )
+            writeEntries(prefs, entries.values)
+        }
+        recordLearnedContext(prefs, previousWords, word)
+    }
+
+    fun recordAcceptedContext(prefs: SharedPreferences, rawWord: String, previousWords: List<String>) {
+        val word = normalizeWord(rawWord) ?: return
+        recordLearnedContext(prefs, previousWords, word)
     }
 
     fun removeWord(prefs: SharedPreferences, rawWord: String): Boolean {
@@ -635,7 +792,8 @@ object LocalDictionary {
 
     private fun staticGlideCandidates(trace: String): Sequence<StaticWordEntry> {
         val buckets = staticIndex().lengthBuckets
-        val minLength = maxOf(2, trace.length - 2)
+        // ponytail: noisy long traces scan the bounded dictionary once; exact short traces keep narrow buckets.
+        val minLength = if (trace.length >= 7) 2 else maxOf(2, trace.length - 2)
         val maxLength = if (trace.length <= 3) {
             minOf(MAX_WORD_LENGTH, trace.length + 1)
         } else {
@@ -669,6 +827,7 @@ object LocalDictionary {
         word: String,
         baseScore: Int,
         input: List<GlidePoint>,
+        rawPoints: List<GlidePoint>,
         keyCenters: Map<Char, GlidePoint>,
         diagonal: Float,
         startChar: Char?,
@@ -692,8 +851,13 @@ object LocalDictionary {
         val meanDistance = sumDistance / input.size
         val startDistance = distance(input.first(), sampledWord.first()) / diagonal
         val endDistance = distance(input.last(), sampledWord.last()) / diagonal
+        val inputTravel = pathLength(input)
+        val wordTravel = pathLength(wordPath)
+        // ponytail: one normalized travel penalty; add timing-aware beam states only if evaluation needs them.
+        val travelMismatch = abs(inputTravel - wordTravel) / maxOf(inputTravel, wordTravel, 1f)
         val traceCoverage = noisyTraceCoverage(trace, word)
         val shapeCoverage = geometricTraceCoverage(wordPath, input, diagonal)
+        val repeatedLetterBonus = repeatedLetterBonus(word, rawPoints, keyCenters, diagonal)
         val coverage = maxOf(traceCoverage, shapeCoverage)
         val startKeyMismatch = startChar != null && word.first() != startChar
         if (startKeyMismatch && word.length <= 3 && trace.length >= 5 && traceCoverage == 0) return 0
@@ -715,6 +879,7 @@ object LocalDictionary {
         score += if (isBuiltInWord) 240_000 else 0
         score += coverage * 38_000
         score += ((1f - (meanDistance / 0.16f)).coerceIn(0f, 1f) * 460_000).toInt()
+        score += repeatedLetterBonus
         score += if (word == trace) 1_000_000 else 0
         score += if (shapeCoverage == wordPath.size && meanDistance <= 0.06f) 560_000 else 0
         score += if (word.length == 2 && isProtectedShortWord) 420_000 else 0
@@ -733,7 +898,7 @@ object LocalDictionary {
             "things" -> if (languageScore > 0) 900_000 else 0
             "thanks" -> if (trace.lastOrNull() == 'e') 0 else if (trace.lastOrNull() in setOf('s', 'z') || trace.length >= 16 || languageScore > 0) 980_000 else 520_000
             "open" -> if (trace.length >= 8 || 'p' in trace || 'n' in trace || languageScore > 0) 520_000 else 0
-            "see", "app", "doing", "update", "works" -> 520_000
+            "see", "app", "doing", "update" -> 520_000
             else -> 0
         }
         if ('\'' in word && word.length <= 4) {
@@ -741,10 +906,14 @@ object LocalDictionary {
         }
         score += if (endChar != null && word.last() == endChar) 90_000 else 0
         score -= (meanDistance * 360_000).toInt()
+        score -= (travelMismatch.coerceIn(0f, 1f) * 180_000).toInt()
         val endpointWeight = if (word.length <= 3) 120_000 else 260_000
         score -= ((startDistance + endDistance) * endpointWeight).toInt()
         score -= minOf(abs(word.length - trace.length), 4) * 14_000
         score -= skippedTracePenalty(trace, word) * 3_000
+        if (trace.length >= 7 && word.length + 2 <= trace.length && languageScore <= 0) {
+            score -= (trace.length - word.length) * 120_000
+        }
         if (trace.length >= 6 && word.length <= 3 && !isProtectedShortWord) {
             score -= 760_000
         }
@@ -778,6 +947,104 @@ object LocalDictionary {
 
     private fun normalizeContextWords(words: List<String>): List<String> {
         return words.mapNotNull { normalizeWord(it) }.takeLast(3)
+    }
+
+    private fun learnedNgramCandidates(
+        entries: List<LearnedNgramEntry>,
+        context: List<String>
+    ): List<Pair<String, Int>> {
+        if (context.isEmpty()) return emptyList()
+        val scores = mutableMapOf<String, Int>()
+        entries.forEach { entry ->
+            val order = if (' ' in entry.context) 2 else 1
+            val matches = when (order) {
+                2 -> context.size >= 2 && context.takeLast(2).joinToString(" ") == entry.context
+                else -> context.last() == entry.context
+            }
+            if (matches) {
+                val base = if (order == 2) 720_000 else 360_000
+                val score = base + (entry.count * if (order == 2) 15_000 else 10_000)
+                scores[entry.next] = maxOf(scores[entry.next] ?: 0, score)
+            }
+        }
+        return scores.entries.map { it.key to it.value }
+    }
+
+    private fun learnedNgramScore(
+        entries: List<LearnedNgramEntry>,
+        context: List<String>,
+        candidate: String
+    ): Int {
+        return learnedNgramCandidates(entries, context)
+            .firstOrNull { it.first == candidate }
+            ?.second
+            ?: 0
+    }
+
+    private fun recordLearnedContext(
+        prefs: SharedPreferences,
+        previousWords: List<String>,
+        word: String
+    ) {
+        val context = normalizeContextWords(previousWords)
+        if (context.isEmpty()) return
+        val entries = readLearnedNgrams(prefs)
+            .associateBy { "${it.context}\u0000${it.next}" }
+            .toMutableMap()
+
+        fun increment(contextKey: String) {
+            val key = "$contextKey\u0000$word"
+            val current = entries[key]
+            entries[key] = LearnedNgramEntry(
+                context = contextKey,
+                next = word,
+                count = (current?.count ?: 0).plus(1).coerceAtMost(MAX_NGRAM_COUNT)
+            )
+        }
+
+        increment(context.last())
+        if (context.size >= 2) increment(context.takeLast(2).joinToString(" "))
+        writeLearnedNgrams(prefs, entries.values)
+    }
+
+    private fun readLearnedNgrams(prefs: SharedPreferences): List<LearnedNgramEntry> {
+        val raw = prefs.getString(KEY_NGRAMS_JSON, null)
+        if (raw != null && raw == cachedNgramsRaw) return cachedNgrams
+        val parsed = try {
+            val array = if (raw.isNullOrBlank()) JSONArray() else JSONArray(raw)
+            List(array.length()) { index ->
+                val item = array.getJSONObject(index)
+                LearnedNgramEntry(
+                    context = item.optString("context").trim(),
+                    next = normalizeWord(item.optString("next")) ?: "",
+                    count = item.optInt("count", 0).coerceIn(1, MAX_NGRAM_COUNT)
+                )
+            }.filter { it.context.isNotBlank() && it.next.isNotBlank() }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        cachedNgramsRaw = raw
+        cachedNgrams = parsed
+        return parsed
+    }
+
+    private fun writeLearnedNgrams(prefs: SharedPreferences, entries: Collection<LearnedNgramEntry>) {
+        val bounded = entries
+            .sortedWith(compareByDescending<LearnedNgramEntry> { it.count }.thenBy { it.context }.thenBy { it.next })
+            .take(MAX_NGRAM_ENTRIES)
+        val array = JSONArray()
+        bounded.forEach { entry ->
+            array.put(
+                JSONObject()
+                    .put("context", entry.context)
+                    .put("next", entry.next)
+                    .put("count", entry.count)
+            )
+        }
+        val raw = array.toString()
+        cachedNgramsRaw = raw
+        cachedNgrams = bounded
+        prefs.edit().putString(KEY_NGRAMS_JSON, raw).apply()
     }
 
     private fun keyboardDiagonal(points: Collection<GlidePoint>): Float {
@@ -833,6 +1100,38 @@ object LocalDictionary {
         return sqrt((dx * dx) + (dy * dy))
     }
 
+    private fun pathLength(points: List<GlidePoint>): Float {
+        if (points.size < 2) return 0f
+        return points.zipWithNext().sumOf { (left, right) -> distance(left, right).toDouble() }.toFloat()
+    }
+
+    private fun repeatedLetterBonus(
+        word: String,
+        rawPoints: List<GlidePoint>,
+        keyCenters: Map<Char, GlidePoint>,
+        diagonal: Float
+    ): Int {
+        if (rawPoints.size < 3) return 0
+        val nearThreshold = diagonal * 0.10f
+        var score = 0
+        for (index in 0 until word.lastIndex) {
+            if (word[index] != word[index + 1]) continue
+            val center = keyCenters[word[index]] ?: continue
+            val nearIndices = rawPoints.indices.filter { pointIndex ->
+                distance(rawPoints[pointIndex], center) <= nearThreshold
+            }
+            if (nearIndices.size < 3) continue
+            val first = nearIndices.first()
+            val last = nearIndices.last()
+            val localPath = pathLength(rawPoints.subList(first, last + 1)) / diagonal
+            val chord = distance(rawPoints[first], rawPoints[last]) / diagonal
+            if (localPath >= 0.12f && (chord <= 0.05f || localPath >= chord * 1.6f)) {
+                score += 100_000
+            }
+        }
+        return score
+    }
+
     private fun geometricTraceCoverage(wordPath: List<GlidePoint>, input: List<GlidePoint>, diagonal: Float): Int {
         if (wordPath.isEmpty() || input.isEmpty()) return 0
         val threshold = diagonal * 0.09f
@@ -864,13 +1163,19 @@ object LocalDictionary {
     private fun glideScore(trace: String, word: String, baseScore: Int): Int {
         if (word.length < 2 || trace.length < 2) return 0
         if (word.first() != trace.first()) return 0
-        if (trace.length >= 4 && word.length < trace.length) return 0
+        val noisyTrace = trace.length >= word.length + 2
+        if (!noisyTrace && trace.length >= 4 && word.length < trace.length) return 0
         if (trace.length >= 4 && word.last() != trace.last()) return 0
         if (trace.length <= 3 && word.length == 2 && word.last() == trace.last()) {
             return baseScore + 220_000 - ((trace.length - word.length).coerceAtLeast(0) * 20_000)
         }
-        val coverage = orderedCoverage(trace, word)
-        if (coverage < maxOf(2, (trace.length * 0.58f).toInt())) return 0
+        val coverage = if (noisyTrace) noisyTraceCoverage(trace, word) else orderedCoverage(trace, word)
+        val minimumCoverage = if (noisyTrace) {
+            maxOf(2, minOf(word.length, (trace.length * 0.35f).toInt()))
+        } else {
+            maxOf(2, (trace.length * 0.58f).toInt())
+        }
+        if (coverage < minimumCoverage) return 0
 
         var score = baseScore
         score += coverage * 28_000
@@ -901,12 +1206,10 @@ object LocalDictionary {
         var traceIndex = 0
         var covered = 0
         word.forEach { char ->
-            while (traceIndex < trace.length && trace[traceIndex] != char) {
-                traceIndex++
-            }
-            if (traceIndex < trace.length) {
+            val matchIndex = (traceIndex until trace.length).firstOrNull { trace[it] == char }
+            if (matchIndex != null) {
                 covered++
-                traceIndex++
+                traceIndex = matchIndex + 1
             }
         }
         return covered
@@ -920,6 +1223,8 @@ object LocalDictionary {
     private fun addTypoCandidates(
         searchPrefix: String,
         userWords: List<UserWordEntry>,
+        tapPoints: List<GlidePoint>,
+        keyCenters: Map<Char, GlidePoint>,
         offer: (String, Int) -> Unit
     ) {
         val maxDistance = if (searchPrefix.length >= 6) 2 else 1
@@ -929,7 +1234,12 @@ object LocalDictionary {
             if (kotlin.math.abs(compact.length - searchPrefix.length) <= maxDistance) {
                 val distance = editDistanceAtMost(searchPrefix, compact, maxDistance)
                 if (distance in 0..maxDistance) {
-                    offer(word, 42_000 + (entry.weight / 10) - (distance * 12_000))
+                    offer(
+                        word,
+                        42_000 + (entry.weight / 10) - (distance * 12_000) +
+                            keyboardProximityBonus(searchPrefix, compact) +
+                            tapPositionBonus(searchPrefix, compact, tapPoints, keyCenters)
+                    )
                 }
             }
         }
@@ -940,7 +1250,12 @@ object LocalDictionary {
                 if (kotlin.math.abs(compact.length - searchPrefix.length) <= maxDistance) {
                     val distance = editDistanceAtMost(searchPrefix, compact, maxDistance)
                     if (distance in 0..maxDistance) {
-                        offer(entry.word, 58_000 + (entry.frequency * 1_000).coerceAtMost(18_000) - (distance * 12_000))
+                        offer(
+                            entry.word,
+                            58_000 + (entry.frequency * 1_000).coerceAtMost(18_000) - (distance * 12_000) +
+                                keyboardProximityBonus(searchPrefix, compact) +
+                                tapPositionBonus(searchPrefix, compact, tapPoints, keyCenters)
+                        )
                     }
                 }
             }
@@ -968,6 +1283,100 @@ object LocalDictionary {
             current = swap
         }
         return previous[right.length]
+    }
+
+    private fun keyboardProximityBonus(typed: String, candidate: String): Int {
+        if (typed.length != candidate.length) return 0
+        return typed.indices.sumOf { index ->
+            if (typed[index] == candidate[index]) {
+                0
+            } else {
+                when (keyDistance(typed[index], candidate[index])) {
+                    in 0f..1.2f -> 18_000
+                    in 1.2f..2.2f -> 6_000
+                    else -> 0
+                }
+            }
+        }
+    }
+
+    private fun tapPositionBonus(
+        typed: String,
+        candidate: String,
+        tapPoints: List<GlidePoint>,
+        keyCenters: Map<Char, GlidePoint>
+    ): Int {
+        // ponytail: threshold bands keep this cheap; use a Gaussian model if calibration needs finer resolution.
+        if (typed.length != candidate.length || tapPoints.size != typed.length || keyCenters.size < 2) return 0
+        val diagonal = keyboardDiagonal(keyCenters.values).coerceAtLeast(1f)
+        return candidate.indices.sumOf { index ->
+            val center = keyCenters[candidate[index]] ?: return@sumOf 0
+            val normalizedDistance = distance(tapPoints[index], center) / diagonal
+            when {
+                normalizedDistance <= 0.045f -> 9_000
+                normalizedDistance <= 0.09f -> 4_000
+                normalizedDistance <= 0.16f -> 0
+                else -> -6_000
+            }
+        }
+    }
+
+    private fun readTapOffsets(prefs: SharedPreferences): Map<Char, TapOffset> {
+        val raw = prefs.getString(KEY_TAP_OFFSETS_JSON, null)
+        if (raw != null && raw == cachedTapOffsetsRaw) return cachedTapOffsets
+        val parsed = try {
+            val json = if (raw.isNullOrBlank()) JSONObject() else JSONObject(raw)
+            json.keys().asSequence().mapNotNull { key ->
+                val value = json.optJSONObject(key) ?: return@mapNotNull null
+                val char = key.singleOrNull() ?: return@mapNotNull null
+                TapOffset(
+                    x = value.optDouble("x", 0.0).toFloat().coerceIn(-MAX_TAP_OFFSET_NORMALIZED, MAX_TAP_OFFSET_NORMALIZED),
+                    y = value.optDouble("y", 0.0).toFloat().coerceIn(-MAX_TAP_OFFSET_NORMALIZED, MAX_TAP_OFFSET_NORMALIZED),
+                    samples = value.optInt("samples", 0).coerceIn(0, MAX_TAP_OFFSET_SAMPLES)
+                ).takeIf { it.samples > 0 }?.let { char to it }
+            }.toMap()
+        } catch (_: Exception) {
+            emptyMap()
+        }
+        cachedTapOffsetsRaw = raw
+        cachedTapOffsets = parsed
+        return parsed
+    }
+
+    private fun writeTapOffsets(prefs: SharedPreferences, offsets: Map<Char, TapOffset>) {
+        val json = JSONObject()
+        offsets.toSortedMap().forEach { (char, offset) ->
+            json.put(
+                char.toString(),
+                JSONObject()
+                    .put("x", offset.x)
+                    .put("y", offset.y)
+                    .put("samples", offset.samples)
+            )
+        }
+        val raw = json.toString()
+        cachedTapOffsetsRaw = raw
+        cachedTapOffsets = offsets
+        prefs.edit().putString(KEY_TAP_OFFSETS_JSON, raw).apply()
+    }
+
+    private fun keyDistance(left: Char, right: Char): Float {
+        val leftPosition = qwertyKeyPositions[left] ?: return Float.MAX_VALUE
+        val rightPosition = qwertyKeyPositions[right] ?: return Float.MAX_VALUE
+        val dx = leftPosition.x - rightPosition.x
+        val dy = leftPosition.row - rightPosition.row
+        return sqrt((dx * dx) + (dy * dy))
+    }
+
+    // ponytail: fixed QWERTY geometry; language-pack-specific layouts remain a later upgrade.
+    private val qwertyKeyPositions: Map<Char, KeyPosition> by lazy {
+        listOf(
+            "qwertyuiop" to 0f,
+            "asdfghjkl" to 0.5f,
+            "zxcvbnm" to 1.5f
+        ).flatMapIndexed { row, (keys, offset) ->
+            keys.mapIndexed { index, char -> char to KeyPosition(row, index + offset) }
+        }.toMap()
     }
 
     private fun buildStaticIndex(entries: List<StaticWordEntry>): StaticIndex {
@@ -998,6 +1407,35 @@ object LocalDictionary {
             '\u2018', '\u2019', '\u02bc', '\uff07', '`' -> '\''
             else -> char
         }
+    }
+
+    private fun emailCompletions(token: String, limit: Int): List<String> {
+        val at = token.indexOf('@')
+        if (at != token.lastIndexOf('@')) return emptyList()
+        val local = token.substringBefore('@')
+        if (local.isEmpty() || local.any { !it.isLetterOrDigit() && it !in "._-+" }) return emptyList()
+        val domainPrefix = if (at >= 0) token.substring(at + 1).lowercase(Locale.ROOT) else ""
+        val domains = listOf("gmail.com", "outlook.com", "icloud.com", "yahoo.com", "proton.me", "fastmail.com")
+            .filter { it.startsWith(domainPrefix) && it != domainPrefix }
+        return domains
+            .map { "$local@$it" }
+            .filter { it != token }
+            .take(limit)
+    }
+
+    private fun urlCompletions(token: String, limit: Int): List<String> {
+        if (!token.any(Char::isLetterOrDigit) || token.any(Char::isWhitespace) || '@' in token) return emptyList()
+        val lastSlash = token.lastIndexOf('/')
+        val lastDot = token.lastIndexOf('.')
+        val suffixPrefix = if (lastDot > lastSlash) token.substring(lastDot + 1).lowercase(Locale.ROOT) else ""
+        val suffixes = listOf("com", "org", "net", "io", "dev", "app", "co")
+            .filter { it.startsWith(suffixPrefix) && it != suffixPrefix }
+        return suffixes
+            .map { suffix ->
+                if (lastDot > lastSlash) token.substring(0, lastDot + 1) + suffix else "$token.$suffix"
+            }
+            .filter { it != token }
+            .take(limit)
     }
 
     private fun readEntries(prefs: SharedPreferences): List<UserWordEntry> {
@@ -1126,6 +1564,22 @@ data class GlidePoint(
     val y: Float
 )
 
+data class TapSample(
+    val char: Char,
+    val point: GlidePoint
+)
+
+data class TapOffset(
+    val x: Float,
+    val y: Float,
+    val samples: Int
+)
+
+enum class FieldCompletionKind {
+    EMAIL,
+    URL
+}
+
 private class OfflineGlideLanguageModel(
     private val bigrams: Map<String, List<String>>,
     private val trigrams: Map<String, List<String>>,
@@ -1159,6 +1613,12 @@ private data class RankedCandidate(
     val score: Int
 )
 
+private data class LearnedNgramEntry(
+    val context: String,
+    val next: String,
+    val count: Int
+)
+
 private data class StaticWordEntry(
     val word: String,
     val weight: Int,
@@ -1168,6 +1628,11 @@ private data class StaticWordEntry(
 private data class StaticIndex(
     val prefixBuckets: Map<String, List<StaticWordEntry>>,
     val lengthBuckets: Map<Int, List<StaticWordEntry>>
+)
+
+private data class KeyPosition(
+    val row: Int,
+    val x: Float
 )
 
 data class ImportResult(

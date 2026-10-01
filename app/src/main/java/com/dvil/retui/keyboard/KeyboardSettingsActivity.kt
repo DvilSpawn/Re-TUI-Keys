@@ -550,7 +550,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
             onChanged = ::saveCyberdeckMode
         )
         val fontLabel = terminalLabel("FONT: ${fontLabel()}", TEXT_MEDIUM_SP, bold = true)
-        fontLabel.setTextColor(theme.accent)
+        fontLabel.setTextColor(settingsAccentColor)
         val fontParams = LinearLayout.LayoutParams(-1, -2)
         fontParams.setMargins(0, dp(8), 0, dp(5))
         list.addView(fontLabel, fontParams)
@@ -609,7 +609,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         )
 
         val imageLabel = terminalLabel("BACKGROUND: ${backgroundLabel()}", TEXT_MEDIUM_SP, bold = true)
-        imageLabel.setTextColor(theme.accent)
+        imageLabel.setTextColor(settingsAccentColor)
         val imageParams = LinearLayout.LayoutParams(-1, -2)
         imageParams.setMargins(0, dp(8), 0, dp(5))
         list.addView(imageLabel, imageParams)
@@ -656,7 +656,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
             TEXT_MEDIUM_SP,
             bold = true
         )
-        section.setTextColor(theme.accent)
+        section.setTextColor(settingsAccentColor)
         section.setPadding(dp(8), dp(10), dp(8), dp(5))
         section.isClickable = true
         section.isFocusable = true
@@ -733,7 +733,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         copy.addView(title, LinearLayout.LayoutParams(-1, dp(22)))
 
         val description = terminalLabel(summary, TEXT_SMALL_SP, bold = false)
-        description.setTextColor(theme.dim)
+        description.setTextColor(settingsDimColor)
         description.maxLines = 2
         copy.addView(description, LinearLayout.LayoutParams(-1, -2))
 
@@ -745,10 +745,10 @@ class KeyboardSettingsActivity : ComponentActivity() {
         fun render(next: Boolean) {
             enabled = next
             toggle.text = if (enabled) "ON" else "OFF"
-            toggle.setTextColor(if (enabled) withAlpha(theme.bg, 255) else theme.dim)
+            toggle.setTextColor(if (enabled) withAlpha(theme.bg, 255) else settingsDimColor)
             toggle.background = panelDrawable(
-                fill = if (enabled) theme.accent else theme.inputBg,
-                stroke = if (enabled) theme.accent else withAlpha(theme.inputBorder, 160),
+                fill = if (enabled) settingsAccentColor else theme.inputBg,
+                stroke = if (enabled) settingsAccentColor else withAlpha(theme.inputBorder, 160),
                 strokeDp = 1f,
                 radiusDp = theme.headerCornerRadiusDp.coerceAtLeast(theme.moduleCornerRadiusDp),
                 notch = false,
@@ -822,14 +822,14 @@ class KeyboardSettingsActivity : ComponentActivity() {
 
         val suffixView = terminalLabel(suffix, TEXT_SMALL_SP, bold = true)
         suffixView.gravity = Gravity.CENTER_VERTICAL
-        suffixView.setTextColor(theme.dim)
+        suffixView.setTextColor(settingsDimColor)
         suffixView.setPadding(dp(6), 0, 0, 0)
         headerRow.addView(suffixView, LinearLayout.LayoutParams(dp(34), dp(34)))
         row.addView(headerRow, LinearLayout.LayoutParams(-1, dp(34)))
 
         if (summary.isNotBlank()) {
             val description = terminalLabel(summary, TEXT_SMALL_SP, bold = false)
-            description.setTextColor(theme.dim)
+            description.setTextColor(settingsDimColor)
             description.setPadding(0, 0, 0, dp(5))
             row.addView(description, LinearLayout.LayoutParams(-1, -2))
         }
@@ -911,7 +911,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
             else -> "THEME SOURCE: KEYBOARD DEFAULT"
         }
         val sourceLabel = terminalLabel(source, TEXT_MEDIUM_SP, bold = true)
-        sourceLabel.setTextColor(theme.accent)
+        sourceLabel.setTextColor(settingsAccentColor)
         val sourceParams = LinearLayout.LayoutParams(-1, dp(28))
         sourceParams.setMargins(0, dp(2), 0, dp(4))
         parent.addView(sourceLabel, sourceParams)
@@ -951,7 +951,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         row.addView(title, LinearLayout.LayoutParams(-1, dp(24)))
 
         val description = terminalLabel(binding.summary, TEXT_SMALL_SP, bold = false)
-        description.setTextColor(theme.dim)
+        description.setTextColor(settingsDimColor)
         description.maxLines = 2
         row.addView(description, LinearLayout.LayoutParams(-1, -2))
 
@@ -1021,7 +1021,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
             channelRow.orientation = LinearLayout.HORIZONTAL
             channelRow.gravity = Gravity.CENTER_VERTICAL
             val channelLabel = terminalLabel("$channel 000", TEXT_SMALL_SP, bold = true)
-            channelLabel.setTextColor(theme.dim)
+            channelLabel.setTextColor(settingsDimColor)
             channelRow.addView(channelLabel, LinearLayout.LayoutParams(dp(54), dp(34)))
 
             val slider = SeekBar(this)
@@ -1069,8 +1069,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
             InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
         input.imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_FULLSCREEN
-        input.setTextColor(theme.text)
-        input.setHintTextColor(withAlpha(theme.dim, 150))
+        input.setTextColor(settingsInputTextColor)
+        input.setHintTextColor(withAlpha(settingsDimColor, 150))
         input.textSize = TEXT_MEDIUM_SP
         input.setPadding(dp(10), 0, dp(10), 0)
         input.background = panelDrawable(
@@ -1122,7 +1122,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
     private fun addDictionaryControls(parent: LinearLayout) {
         val words = LocalDictionary.userWords(prefs)
         val count = terminalLabel("LOCAL WORDS: ${words.size}", TEXT_MEDIUM_SP, bold = true)
-        count.setTextColor(theme.accent)
+        count.setTextColor(settingsAccentColor)
         val countParams = LinearLayout.LayoutParams(-1, dp(30))
         countParams.setMargins(0, dp(2), 0, dp(4))
         parent.addView(count, countParams)
@@ -1250,7 +1250,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         val button = TextView(this)
         button.text = label.uppercase(Locale.US)
         button.typeface = settingsTypeface()
-        button.setTextColor(theme.text)
+        button.setTextColor(settingsTextColor)
         button.textSize = TEXT_MEDIUM_SP
         button.gravity = Gravity.CENTER
         button.setIncludeFontPadding(false)
@@ -1267,7 +1267,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         val activeId = LanguagePackManager.activeId(prefs)
         val activeName = packs.firstOrNull { it.id == activeId }?.nativeName ?: "English"
         val status = terminalLabel("ACTIVE: $activeName", TEXT_MEDIUM_SP, bold = true)
-        status.setTextColor(theme.accent)
+        status.setTextColor(settingsAccentColor)
         status.gravity = Gravity.CENTER
         parent.addView(status, LinearLayout.LayoutParams(-1, dp(38)))
 
@@ -1409,13 +1409,13 @@ class KeyboardSettingsActivity : ComponentActivity() {
         root.addView(title, LinearLayout.LayoutParams(-2, dp(34)))
 
         val progress = terminalLabel("", TEXT_MEDIUM_SP, bold = true)
-        progress.setTextColor(theme.accent)
+        progress.setTextColor(settingsAccentColor)
         progress.setPadding(dp(2), dp(12), dp(2), dp(4))
         root.addView(progress, LinearLayout.LayoutParams(-1, dp(42)))
 
         val prompt = terminalLabel("", 22f, bold = true)
         prompt.gravity = Gravity.CENTER
-        prompt.setTextColor(theme.text)
+        prompt.setTextColor(settingsTextColor)
         prompt.setPadding(dp(10), dp(10), dp(10), dp(10))
         prompt.background = panelDrawable(
             fill = theme.outputBg,
@@ -1432,8 +1432,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
         input.setSingleLine(true)
         input.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         input.imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_FULLSCREEN
-        input.setTextColor(theme.accent)
-        input.setHintTextColor(withAlpha(theme.dim, 150))
+        input.setTextColor(settingsInputTextColor)
+        input.setHintTextColor(withAlpha(settingsDimColor, 150))
         input.textSize = 18f
         input.setPadding(dp(12), 0, dp(12), 0)
         input.background = panelDrawable(
@@ -1523,7 +1523,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
             TEXT_SMALL_SP,
             bold = false
         )
-        note.setTextColor(theme.dim)
+        note.setTextColor(settingsDimColor)
         note.setPadding(dp(2), dp(10), dp(2), 0)
         note.maxLines = 3
         root.addView(note, LinearLayout.LayoutParams(-1, -2))
@@ -1537,7 +1537,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
     private fun addInlineTrainingButton(parent: LinearLayout, label: String, action: () -> Unit) {
         val button = terminalLabel(label, TEXT_MEDIUM_SP, bold = true)
         button.gravity = Gravity.CENTER
-        button.setTextColor(theme.text)
+        button.setTextColor(settingsTextColor)
         button.isClickable = true
         button.isFocusable = true
         button.background = buttonDrawable(primary = false)
@@ -1758,7 +1758,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         previewDock.clipChildren = false
         previewDock.clipToPadding = false
         previewDock.setPadding(dp(8), dp(14), dp(8), dp(8))
-        previewDock.setBackgroundColor(theme.bg)
+        previewDock.setBackgroundColor(theme.panelBg)
 
         val previewFrame = FrameLayout(this)
         previewFrame.clipChildren = false
@@ -1794,6 +1794,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
 
         val prefix = terminalLabel("$", TEXT_MEDIUM_SP, bold = true)
         prefix.gravity = Gravity.CENTER
+        prefix.setTextColor(settingsInputTextColor)
         group.addView(prefix, LinearLayout.LayoutParams(dp(18), -1))
 
         previewInput = EditText(this)
@@ -1801,8 +1802,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
         previewInput.typeface = settingsTypeface()
         previewInput.setSingleLine(true)
         previewInput.hint = getString(R.string.setting_preview_hint)
-        previewInput.setTextColor(theme.accent)
-        previewInput.setHintTextColor(withAlpha(theme.accent, 150))
+        previewInput.setTextColor(settingsInputTextColor)
+        previewInput.setHintTextColor(withAlpha(settingsInputTextColor, 150))
         previewInput.setBackgroundColor(Color.TRANSPARENT)
         previewInput.setPadding(dp(6), 0, dp(6), 0)
         previewInput.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
@@ -1816,7 +1817,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         val view = TextView(this)
         view.text = text
         view.typeface = settingsTypeface()
-        view.setTextColor(theme.text)
+        view.setTextColor(settingsTextColor)
         view.textSize = sizeSp
         view.gravity = Gravity.CENTER_VERTICAL
         view.setIncludeFontPadding(false)
@@ -1834,7 +1835,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         }
         val view = terminalLabel(text, size, bold = true)
         view.gravity = Gravity.CENTER
-        view.setTextColor(theme.headerText)
+        view.setTextColor(settingsHeaderTextColor)
         view.minWidth = dp(minWidthDp)
         view.minHeight = if (small) dp(26) else dp(30)
         view.setPadding(dp(12), dp(2), dp(12), dp(2))
@@ -1863,8 +1864,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
         input.gravity = Gravity.CENTER
         input.inputType = InputType.TYPE_CLASS_NUMBER
         input.imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_FULLSCREEN
-        input.setTextColor(theme.text)
-        input.setHintTextColor(withAlpha(theme.dim, 150))
+        input.setTextColor(settingsInputTextColor)
+        input.setHintTextColor(withAlpha(settingsDimColor, 150))
         input.textSize = TEXT_MEDIUM_SP
         input.setPadding(dp(2), 0, dp(2), 0)
         input.background = panelDrawable(
@@ -1886,8 +1887,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
         input.hint = getString(R.string.setting_dictionary_add_hint).uppercase(Locale.US)
         input.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         input.imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_FULLSCREEN
-        input.setTextColor(theme.text)
-        input.setHintTextColor(withAlpha(theme.dim, 150))
+        input.setTextColor(settingsInputTextColor)
+        input.setHintTextColor(withAlpha(settingsDimColor, 150))
         input.textSize = TEXT_MEDIUM_SP
         input.setPadding(dp(10), 0, dp(10), 0)
         input.background = panelDrawable(
@@ -1911,8 +1912,8 @@ class KeyboardSettingsActivity : ComponentActivity() {
             InputType.TYPE_TEXT_FLAG_MULTI_LINE or
             InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         input.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN
-        input.setTextColor(theme.text)
-        input.setHintTextColor(withAlpha(theme.dim, 150))
+        input.setTextColor(settingsInputTextColor)
+        input.setHintTextColor(withAlpha(settingsDimColor, 150))
         input.textSize = TEXT_MEDIUM_SP
         input.setPadding(dp(10), dp(8), dp(10), dp(8))
         input.background = panelDrawable(
@@ -2039,7 +2040,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
     private fun terminalBar(value: Int, min: Int, max: Int): TextView {
         val bar = terminalLabel(glyphBar(value, min, max), TEXT_MEDIUM_SP, bold = true)
         bar.gravity = Gravity.CENTER
-        bar.setTextColor(theme.accent)
+        bar.setTextColor(settingsAccentColor)
         bar.isClickable = false
         bar.isFocusable = false
         bar.background = panelDrawable(
@@ -2208,11 +2209,11 @@ class KeyboardSettingsActivity : ComponentActivity() {
     }
 
     private fun buttonDrawable(primary: Boolean): Drawable {
-        val normalFill = if (primary) blendColor(theme.actionBg, theme.accent, 0.12f) else theme.actionBg
+        val normalFill = if (primary) blendColor(theme.actionBg, settingsAccentColor, 0.12f) else theme.actionBg
         val pressedFill = blendColor(normalFill, Color.WHITE, 0.14f)
         val normal = panelDrawable(
             fill = normalFill,
-            stroke = if (primary) theme.accent else theme.border,
+            stroke = if (primary) settingsAccentColor else theme.border,
             strokeDp = if (primary) 1.5f else 1f,
             radiusDp = theme.moduleCornerRadiusDp,
             notch = false,
@@ -2220,7 +2221,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         )
         val pressed = panelDrawable(
             fill = pressedFill,
-            stroke = theme.accent,
+            stroke = settingsAccentColor,
             strokeDp = 1.5f,
             radiusDp = theme.moduleCornerRadiusDp,
             notch = false,
@@ -2250,7 +2251,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
                 ClipDrawable(
                     frameRenderer.drawable(
                         RetuiVisualContract.FRAME_ROLE_SLIDER_PROGRESS,
-                        theme.accent,
+                        settingsAccentColor,
                         progressFallback
                     ),
                     Gravity.START,
@@ -2261,7 +2262,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         }
         view.thumb = frameRenderer.drawable(
             RetuiVisualContract.FRAME_ROLE_SLIDER_THUMB,
-            theme.accent,
+            settingsAccentColor,
             view.thumb,
             intrinsicDp = 24f
         )
@@ -2520,6 +2521,28 @@ class KeyboardSettingsActivity : ComponentActivity() {
         )
     }
 
+    private fun contrastingTextColor(background: Int): Int {
+        val brightness = (Color.red(background) * 299) +
+            (Color.green(background) * 587) +
+            (Color.blue(background) * 114)
+        return if (brightness >= 128_000) Color.BLACK else Color.WHITE
+    }
+
+    private val settingsTextColor: Int
+        get() = contrastingTextColor(theme.panelBg)
+
+    private val settingsHeaderTextColor: Int
+        get() = contrastingTextColor(theme.headerBg)
+
+    private val settingsInputTextColor: Int
+        get() = contrastingTextColor(theme.inputBg)
+
+    private val settingsDimColor: Int
+        get() = blendColor(settingsTextColor, theme.panelBg, 0.42f)
+
+    private val settingsAccentColor: Int
+        get() = settingsTextColor
+
     private fun readSettingsThemeSnapshot(prefix: String, fallback: SettingsTheme): SettingsTheme {
         return fallback.copy(
             bg = prefs.getInt(prefix + "bg", fallback.bg),
@@ -2619,12 +2642,6 @@ class KeyboardSettingsActivity : ComponentActivity() {
                 summary = "Color behind the entire keyboard.",
                 get = { it.bg },
                 set = { state, color -> state.copy(bg = color) }
-            ),
-            ColorBinding(
-                label = "Primary text",
-                summary = "Default text color used by keyboard surfaces.",
-                get = { it.text },
-                set = { state, color -> state.copy(text = color) }
             ),
             ColorBinding(
                 label = "Shared border",

@@ -351,6 +351,33 @@ internal object LanguagePackDictionary {
         return if (containsKnownWord(pack, prefs, word) && limit > 0) listOf(word) else emptyList()
     }
 
+    fun suggestGlideGeometry(
+        pack: LanguagePack,
+        prefs: SharedPreferences,
+        points: List<GlidePoint>,
+        keyCenters: Map<Char, GlidePoint>,
+        rawTrace: String,
+        limit: Int
+    ): List<String> {
+        val maxLength = minOf(32, maxOf(12, rawTrace.count(Char::isLetter) + 2))
+        val candidates = pack.words
+            .asSequence()
+            .filter { it.word.length in 2..maxLength }
+            .map { it.word to (it.frequency * 720) } +
+            readEntries(pack, prefs)
+                .asSequence()
+                .filter { it.word.length in 2..maxLength }
+                .map { it.word to (135_000 + (it.frequency * 2_200).coerceAtMost(60_000)) }
+        return LocalDictionary.rankGlideGeometry(
+            candidates = candidates,
+            points = points,
+            keyCenters = keyCenters,
+            rawTrace = rawTrace,
+            limit = limit,
+            normalize = pack::normalizeWord
+        )
+    }
+
     fun learnTypedWord(pack: LanguagePack, prefs: SharedPreferences, rawWord: String, force: Boolean): Boolean {
         val word = pack.normalizeWord(rawWord) ?: return false
         val entries = readEntries(pack, prefs).associateBy { it.word }.toMutableMap()

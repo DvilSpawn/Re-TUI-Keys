@@ -37,4 +37,30 @@ class LanguagePackTest {
         assertTrue(LanguagePackDictionary.suggest(pack, prefs, "رتو", 5).contains("رتویی"))
         assertTrue(LocalDictionary.suggest(prefs, "ret", 5).none { it == "رتویی" })
     }
+
+    @Test
+    fun persianPackRanksExactGlideGeometryPath() {
+        val packFile = listOf(
+            File("language-packs/dist/persian-fa-IR-v1.retui-lang"),
+            File("../language-packs/dist/persian-fa-IR-v1.retui-lang")
+        ).first(File::isFile)
+        val pack = LanguagePackArchive.parse(packFile.readBytes())
+        val prefs = FakeSharedPreferences()
+        val centers = pack.rows.flatMapIndexed { row, keys ->
+            val xOffset = when (row) {
+                1 -> 25f
+                2 -> 75f
+                else -> 0f
+            }
+            keys.mapIndexed { index, key ->
+                key.single() to GlidePoint(xOffset + (index * 50f), row * 50f)
+            }
+        }.toMap()
+        val path = "سلام".map { centers.getValue(it) }
+
+        assertEquals(
+            "سلام",
+            LanguagePackDictionary.suggestGlideGeometry(pack, prefs, path, centers, "سلام", 3).firstOrNull()
+        )
+    }
 }
