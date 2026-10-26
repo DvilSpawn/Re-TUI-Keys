@@ -33,9 +33,22 @@ internal data class LanguagePack(
     val characterMap: Map<Char, String>,
     val stripMarks: Boolean,
     val casing: String,
+    val gridRows: Boolean,
     internal val words: List<LanguagePackWord>
 ) {
-    private val locale = Locale.forLanguageTag(languageTag)
+    internal val locale = Locale.forLanguageTag(languageTag)
+
+    /**
+     * True when the layout is written in a bicameral script and therefore needs a SHIFT key.
+     * Detected from the declared rows so pack authors do not have to flag it; `casing: "none"`
+     * turns it off explicitly for caseless scripts such as Persian.
+     */
+    val bicameral: Boolean by lazy {
+        casing != "none" && rows.any { row ->
+            row.any { key -> key.uppercase(locale) != key.lowercase(locale) }
+        }
+    }
+
     private val wordSet by lazy { words.mapTo(HashSet(words.size)) { it.word } }
     private val prefixIndex by lazy {
         val buckets = HashMap<String, MutableList<LanguagePackWord>>()
@@ -66,6 +79,13 @@ internal data class LanguagePack(
 
     fun isWordChar(char: Char): Boolean = char.isLetter() || char in joiners
 
+    /** Shifted form of a layout key, using the pack locale so `lt`, `tr` and friends case correctly. */
+    fun upperKey(key: String): String = if (bicameral) key.uppercase(locale) else key
+
+    /** Columns a grid layout renders per row: the widest row, BACKSPACE included. */
+    val gridColumns: Int
+        get() = rows[0].size
+
     internal fun containsStatic(word: String): Boolean = word in wordSet
 
     internal fun staticSuggestions(prefix: String, limit: Int): List<String> {
@@ -81,6 +101,33 @@ internal data class LanguagePack(
     companion object {
         private const val MAX_WORD_LENGTH = 32
     }
+}
+
+/**
+ * Width budget for the bottom letter row of a language pack. Packs may declare up to fourteen
+ * letters per row, so SHIFT, the joiner and BACKSPACE have to give way instead of pushing the
+ * letters off screen.
+ */
+internal object LanguagePackLayout {
+    const val MAX_ROW_UNITS = 12f
+    const val MIN_SPECIAL_UNITS = 0.8f
+
+    fun specialWeights(letterCount: Int, requested: List<Float>): List<Float> {
+        if (requested.isEmpty()) return requested
+        val total = requested.sum()
+        val allowed = maxOf(MAX_ROW_UNITS - letterCount, requested.size * MIN_SPECIAL_UNITS)
+        if (total <= allowed) return requested
+        val scale = allowed / total
+        return requested.map { it * scale }
+    }
+
+    /** Columns per half of a split keyboard: the widest row decides, so the clusters stay aligned. */
+    fun halfColumns(rowSizes: List<Int>): Int =
+        rowSizes.filter { it > 0 }.maxOfOrNull { (it + 1) / 2 } ?: 1
+
+    /** Where a row breaks into its left and right cluster. */
+    fun splitIndex(columnCount: Int, halfColumns: Int): Int =
+        minOf(halfColumns, (columnCount + 1) / 2)
 }
 
 internal data class LanguagePackInstallResult(
@@ -118,12 +165,58 @@ internal object LanguagePackManager {
     }
 
     fun installedPacks(context: Context): List<LanguagePack> {
-        return packDirectory(context)
+        val files = packDirectory(context)
             .listFiles { file -> file.isFile && file.name.endsWith(EXTENSION) }
             .orEmpty()
-            .mapNotNull { file -> runCatching { LanguagePackArchive.parse(file.readBytes()) }.getOrNull() }
+        pruneCache(files.mapTo(HashSet()) { it.absolutePath })
+        return files
+            .mapNotNull(::parseFile)
             .sortedBy { it.name.lowercase(Locale.ROOT) }
     }
+
+    /**
+     * Parses a pack archive, reusing the previous result while the file is untouched.
+     *
+     * The keyboard reloads its pack list on every `onStartInput` and `onStartInputView`, so this
+     * runs twice each time the keyboard appears. Re-inflating and re-normalizing 50,000 words per
+     * pack there is a visible stall, and it also threw away the lazy prefix index that powers
+     * completions.
+     */
+    internal fun parseFile(file: java.io.File): LanguagePack? {
+        val key = file.absolutePath
+        val length = file.length()
+        val modifiedAt = file.lastModified()
+        cache[key]?.let { cached ->
+            if (cached.length == length && cached.modifiedAt == modifiedAt) return cached.pack
+        }
+        if (length > MAX_ARCHIVE_BYTES) {
+            cache.remove(key)
+            return null
+        }
+        val pack = runCatching { LanguagePackArchive.parse(file.readBytes()) }.getOrNull()
+        if (pack == null) {
+            cache.remove(key)
+            return null
+        }
+        cache[key] = CachedPack(length, modifiedAt, pack)
+        return pack
+    }
+
+    private fun pruneCache(livePaths: Set<String>) {
+        cache.keys.retainAll(livePaths)
+    }
+
+    internal fun clearCache() {
+        cache.clear()
+    }
+
+    private class CachedPack(
+        val length: Long,
+        val modifiedAt: Long,
+        val pack: LanguagePack
+    )
+
+    private val cache = HashMap<String, CachedPack>()
 
     fun install(context: Context, input: InputStream): LanguagePackInstallResult {
         return try {
@@ -144,6 +237,7 @@ internal object LanguagePackManager {
             } catch (_: AtomicMoveNotSupportedException) {
                 Files.move(pending.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
             }
+            cache[target.absolutePath] = CachedPack(target.length(), target.lastModified(), pack)
             LanguagePackInstallResult(pack = pack)
         } catch (error: Exception) {
             LanguagePackInstallResult(error = error.message ?: "Invalid language pack")
@@ -154,6 +248,7 @@ internal object LanguagePackManager {
         if (id == ENGLISH_ID || !PACK_ID.matches(id)) return false
         val file = java.io.File(packDirectory(context), id + EXTENSION)
         if (!file.isFile || !file.delete()) return false
+        cache.remove(file.absolutePath)
         setActive(prefs, ENGLISH_ID)
         return true
     }
@@ -161,9 +256,7 @@ internal object LanguagePackManager {
     private fun load(context: Context, id: String): LanguagePack? {
         if (!PACK_ID.matches(id)) return null
         val file = java.io.File(packDirectory(context), id + EXTENSION)
-        return if (!file.isFile || file.length() > MAX_ARCHIVE_BYTES) null else {
-            runCatching { LanguagePackArchive.parse(file.readBytes()) }.getOrNull()
-        }
+        return if (!file.isFile) null else parseFile(file)
     }
 
     private fun packDirectory(context: Context) = java.io.File(context.filesDir, DIRECTORY)
@@ -219,11 +312,18 @@ internal object LanguagePackArchive {
         require(direction == "ltr" || direction == "rtl") { "Invalid text direction" }
         val casing = manifest.optString("casing", "lower")
         require(casing == "lower" || casing == "none") { "Invalid casing mode" }
+        val rowStyle = manifest.optString("rowStyle", "staggered")
+        require(rowStyle == "staggered" || rowStyle == "grid") { "Invalid row style" }
 
         val rows = manifest.getJSONArray("rows").toStringRows()
         require(rows.size == 3) { "Language pack must contain three key rows" }
         require(rows.all { it.size in 6..14 }) { "Invalid language pack key row" }
         require(rows.flatten().all { it.isNotBlank() && it.length <= 4 }) { "Invalid language pack key" }
+        if (rowStyle == "grid") {
+            require(rows[0].size == rows[1].size && rows[2].size + 1 == rows[0].size) {
+                "Grid rows must be equal width, with the last row reserving one key for backspace"
+            }
+        }
 
         val digits = manifest.optJSONArray("digits")?.toStringList().orEmpty()
         require(digits.isEmpty() || (digits.size == 10 && digits.all { it.length <= 2 })) {
@@ -264,6 +364,7 @@ internal object LanguagePackArchive {
             characterMap = characterMap,
             stripMarks = manifest.optBoolean("stripMarks", false),
             casing = casing,
+            gridRows = rowStyle == "grid",
             words = emptyList()
         )
 
