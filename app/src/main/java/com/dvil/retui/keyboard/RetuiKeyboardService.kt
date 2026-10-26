@@ -2199,7 +2199,11 @@ class RetuiKeyboardService : InputMethodService() {
                         if (selectedChoice?.text != null) {
                             clearPopup()
                             commitFromKey(selectedChoice.text)
-                        } else if (selectedChoice?.shortcut != null && shortcutSelectionArmed) {
+                        } else if (
+                            selectedChoice?.shortcut != null &&
+                            // A lone shortcut has nothing to swipe to, so releasing on it launches.
+                            (shortcutSelectionArmed || longPressChoices.size == 1)
+                        ) {
                             clearPopup()
                             requestLauncherShortcut(selectedChoice.shortcut)
                         } else if (longPressHandled) {
