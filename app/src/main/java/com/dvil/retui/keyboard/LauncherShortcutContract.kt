@@ -1,7 +1,10 @@
 package com.dvil.retui.keyboard
 
+import android.content.Context
 import android.content.SharedPreferences
+import android.net.Uri
 import org.json.JSONObject
+import java.io.File
 import java.net.URI
 
 internal object LauncherShortcutContract {
@@ -20,6 +23,8 @@ internal object LauncherShortcutContract {
     private const val MAX_ID_LENGTH = 128
     private const val MAX_LABEL_LENGTH = 64
     private const val MAX_ICON_URI_LENGTH = 1024
+    private const val MAX_ICON_BYTES = 512 * 1024
+    private const val ICON_DIR = "launcher-shortcut-icons"
     private const val ICON_AUTHORITY = "$LAUNCHER_PACKAGE.FILE_PROVIDER"
     private val TOKEN_PATTERN = Regex("[A-Za-z0-9_-]{16,$MAX_TOKEN_LENGTH}")
     private val ID_PATTERN = Regex("[A-Za-z0-9._:-]{1,$MAX_ID_LENGTH}")
@@ -40,6 +45,42 @@ internal object LauncherShortcutContract {
         prefs.edit().putString(PREF_KEY, raw).apply()
         return parsed
     }
+
+    /**
+     * The launcher's read grant on each icon URI is revoked whenever this app is updated, so keep
+     * a private copy that survives until the launcher next sends the shortcuts.
+     */
+    fun cacheIcons(context: Context, state: State, refresh: Boolean) {
+        val directory = File(context.filesDir, ICON_DIR)
+        if (!directory.isDirectory && !directory.mkdirs()) return
+        val shortcuts = state.keys.values.flatten()
+        val wanted = shortcuts.mapTo(HashSet()) { iconFile(context, it).name }
+        directory.listFiles()?.forEach { if (it.name !in wanted) it.delete() }
+        for (shortcut in shortcuts) {
+            val destination = iconFile(context, shortcut)
+            if (!refresh && destination.isFile) continue
+            val temporary = File(directory, destination.name + ".tmp")
+            runCatching {
+                context.contentResolver.openInputStream(Uri.parse(shortcut.iconUri))?.use { input ->
+                    temporary.outputStream().use { output ->
+                        val buffer = ByteArray(8192)
+                        var total = 0
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            require(total <= MAX_ICON_BYTES)
+                            output.write(buffer, 0, count)
+                        }
+                    }
+                } ?: error("unable to open icon")
+                check(temporary.renameTo(destination))
+            }.onFailure { temporary.delete() }
+        }
+    }
+
+    fun iconFile(context: Context, shortcut: Shortcut): File =
+        File(File(context.filesDir, ICON_DIR), shortcut.id + ".png")
 
     fun parse(raw: String?): State? {
         if (raw.isNullOrBlank() || raw.length > MAX_PAYLOAD_LENGTH) return null

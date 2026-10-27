@@ -2670,9 +2670,10 @@ class RetuiKeyboardService : InputMethodService() {
                 contentDescription = choice.shortcut?.label
                 scaleType = ImageView.ScaleType.CENTER_INSIDE
                 setPadding(dp(7), dp(7), dp(7), dp(7))
-                val icon = choice.shortcut?.iconUri?.let { uri ->
+                val icon = choice.shortcut?.let { shortcut ->
                     runCatching {
-                        setImageURI(Uri.parse(uri))
+                        val cached = LauncherShortcutContract.iconFile(context, shortcut)
+                        setImageURI(if (cached.isFile) Uri.fromFile(cached) else Uri.parse(shortcut.iconUri))
                         drawable
                     }.getOrNull()
                 }
@@ -4104,6 +4105,7 @@ class RetuiKeyboardService : InputMethodService() {
         if (currentInfo?.packageName != LauncherShortcutContract.LAUNCHER_PACKAGE) return false
         val raw = bundle.getString(LauncherShortcutContract.BUNDLE_KEY) ?: return false
         val next = LauncherShortcutContract.accept(prefs, raw) ?: return false
+        LauncherShortcutContract.cacheIcons(this, next, refresh = next != launcherShortcuts)
         if (next == launcherShortcuts) return false
         launcherShortcuts = next
         return true
