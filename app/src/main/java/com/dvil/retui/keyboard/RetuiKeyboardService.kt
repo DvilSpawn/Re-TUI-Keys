@@ -1039,13 +1039,14 @@ class RetuiKeyboardService : InputMethodService() {
             textRow(
                 "asdfghjkl",
                 leadingSpacer = homeRowSpacer,
+                longLabels = HOME_ROW_LONG_SYMBOLS,
                 trailingSpacer = homeRowSpacer,
                 edgeAliases = !landscape
             ),
             keyHeight
         )
         val third = mutableListOf(KeySpec(ICON_SHIFT, if (landscape) 1.15f else 1.35f, Special.SHIFT))
-        third.addAll(textRow("zxcvbnm"))
+        third.addAll(textRow("zxcvbnm", longLabels = BOTTOM_ROW_LONG_SYMBOLS))
         third.add(KeySpec(ICON_BACKSPACE, if (landscape) 1.15f else 1.35f, Special.BACKSPACE))
         addKeyRow(parent, third, keyHeight)
         if (layout.showArrowRow) {
@@ -1200,18 +1201,18 @@ class RetuiKeyboardService : InputMethodService() {
         )
         addSplitKeyRow(
             parent = parent,
-            left = textRow("asdfg"),
+            left = textRow("asdfg", longLabels = HOME_ROW_LONG_SYMBOLS.take(5)),
             center = splitSpecialRow(if (layout.showNumberRow) 2 else 1),
-            right = textRow("ghjkl"),
+            right = textRow("ghjkl", longLabels = HOME_ROW_LONG_SYMBOLS.takeLast(5)),
             heightDp = keyHeight
         )
         addSplitKeyRow(
             parent = parent,
             left = mutableListOf(KeySpec(ICON_SHIFT, 1.15f, Special.SHIFT)).apply {
-                addAll(textRow("zxcv"))
+                addAll(textRow("zxcv", longLabels = BOTTOM_ROW_LONG_SYMBOLS.take(4)))
             },
             center = if (layout.showNumberRow) emptyList() else splitSpecialRow(2),
-            right = textRow("vbnm").apply {
+            right = textRow("vbnm", longLabels = BOTTOM_ROW_LONG_SYMBOLS.takeLast(4)).apply {
                 add(KeySpec(ICON_BACKSPACE, 1.15f, Special.BACKSPACE))
             },
             heightDp = keyHeight
@@ -2809,7 +2810,10 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun currentImeAction(): Int {
-        return (currentInfo?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION
+        val options = currentInfo?.imeOptions ?: 0
+        // Multi-line fields set this flag to keep ENTER as a newline despite declaring DONE/SEND.
+        if (options and EditorInfo.IME_FLAG_NO_ENTER_ACTION != 0) return EditorInfo.IME_ACTION_NONE
+        return options and EditorInfo.IME_MASK_ACTION
     }
 
     private fun pressFeedback(view: View) {
@@ -2933,7 +2937,7 @@ class RetuiKeyboardService : InputMethodService() {
             layout = nextLayout,
             theme = theme,
             inputType = info?.inputType ?: 0,
-            imeAction = (info?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION,
+            imeAction = currentImeAction(),
             usesNumberPad = usesNumberPad(info),
             offersSuggestions = shouldOfferSuggestions(nextLayout, info),
             symbols = symbols,
@@ -4872,6 +4876,9 @@ class RetuiKeyboardService : InputMethodService() {
         private const val MAX_TAP_OBSERVATIONS = 32
         private const val SENTENCE_CONTEXT_CHARS = 128
         private const val NAV_MODE_GESTURAL = 2
+        // One long-press symbol per QWERTY letter, in row order.
+        private const val HOME_ROW_LONG_SYMBOLS = "@#\$%&-+()"
+        private const val BOTTOM_ROW_LONG_SYMBOLS = "*\"':;!?"
         private const val ICON_BACKSPACE = "⌫"
         private const val ICON_CLIPBOARD = "⧉"
         private const val ICON_CONTEXT = "⌘"
