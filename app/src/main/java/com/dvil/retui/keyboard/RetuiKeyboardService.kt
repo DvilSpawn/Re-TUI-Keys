@@ -831,7 +831,11 @@ class RetuiKeyboardService : InputMethodService() {
             Toast.makeText(this, "Voice typing unavailable", Toast.LENGTH_SHORT).show()
             return
         }
-        val recognizer = speechRecognizer ?: try {
+        // A cached recognizer stays bound to a dead service after the speech app is killed
+        // (ERROR_SERVER_DISCONNECTED on every start), so bind a fresh one per session.
+        speechRecognizer?.destroy()
+        speechRecognizer = null
+        val recognizer = try {
             SpeechRecognizer.createSpeechRecognizer(this).also {
                 it.setRecognitionListener(voiceRecognitionListener)
                 speechRecognizer = it
