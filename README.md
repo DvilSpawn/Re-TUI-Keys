@@ -25,6 +25,8 @@ storage with manual backup and restore.
 - Android `SharedPreferences` for local settings and dictionary storage
 - Android Storage Access Framework for dictionary backup and restore
 - `org.json` for the local dictionary export format
+- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) `2.0.1` for on-device voice typing with
+  importable voice packs (see `VOICE_PACKS.md`); the AAR is downloaded and checksum-verified at build time
 
 There are no Compose, webview, backend, telemetry, or online suggestion-model
 dependencies.
