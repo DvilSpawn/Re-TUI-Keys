@@ -491,6 +491,9 @@ class KeyboardSettingsActivity : ComponentActivity() {
         addSectionLabel(list, "LANGUAGE PACKS")
         addLanguagePackControls(list)
 
+        addSectionLabel(list, "VOICE INPUT")
+        addVoiceEngineControls(list)
+
         addSectionLabel(list, "CLIPBOARD")
         addTerminalToggle(
             parent = list,
@@ -1260,6 +1263,24 @@ class KeyboardSettingsActivity : ComponentActivity() {
         button.setPadding(dp(10), 0, dp(10), 0)
         button.background = buttonDrawable(primary = false)
         return button
+    }
+
+    private fun addVoiceEngineControls(parent: LinearLayout) {
+        val selected = VoiceEngines.selected(this, prefs)
+        val status = terminalLabel("ENGINE: ${selected?.label ?: "System default"}", TEXT_MEDIUM_SP, bold = true)
+        status.setTextColor(settingsAccentColor)
+        status.gravity = Gravity.CENTER
+        parent.addView(status, LinearLayout.LayoutParams(-1, dp(38)))
+
+        fun choose(engine: VoiceEngines.Engine?) {
+            VoiceEngines.select(prefs, engine)
+            expandedSections.add("VOICE INPUT")
+            rebuildRows()
+        }
+        if (selected != null) addCommandButton(parent, "Use system default") { choose(null) }
+        VoiceEngines.installed(this).filter { it.component != selected?.component }.forEach { engine ->
+            addCommandButton(parent, "Use ${engine.label}") { choose(engine) }
+        }
     }
 
     private fun addLanguagePackControls(parent: LinearLayout) {

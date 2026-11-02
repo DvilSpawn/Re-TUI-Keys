@@ -28,6 +28,7 @@ object KeyboardProfileBackup {
         KeyboardPrefs.KEY_SHOW_NUMBER_ROW,
         KeyboardPrefs.KEY_SOUND_ON_KEYPRESS,
         KeyboardPrefs.KEY_SPLIT_KEYBOARD,
+        VoiceEngines.KEY_VOICE_ENGINE,
         KeyboardPrefs.KEY_STROKE_WIDTH_DP,
         KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN,
         KeyboardPrefs.KEY_VIBRATE_ON_KEYPRESS,

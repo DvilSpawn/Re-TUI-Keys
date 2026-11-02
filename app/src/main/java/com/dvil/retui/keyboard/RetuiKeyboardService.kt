@@ -827,7 +827,8 @@ class RetuiKeyboardService : InputMethodService() {
             })
             return
         }
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+        val engine = VoiceEngines.selected(this, prefs)
+        if (engine == null && !SpeechRecognizer.isRecognitionAvailable(this)) {
             Toast.makeText(this, "Voice typing unavailable", Toast.LENGTH_SHORT).show()
             return
         }
@@ -836,7 +837,7 @@ class RetuiKeyboardService : InputMethodService() {
         speechRecognizer?.destroy()
         speechRecognizer = null
         val recognizer = try {
-            SpeechRecognizer.createSpeechRecognizer(this).also {
+            SpeechRecognizer.createSpeechRecognizer(this, engine?.component).also {
                 it.setRecognitionListener(voiceRecognitionListener)
                 speechRecognizer = it
             }
