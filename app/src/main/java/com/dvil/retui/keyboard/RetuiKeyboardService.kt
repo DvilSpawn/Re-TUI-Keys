@@ -4465,6 +4465,7 @@ class RetuiKeyboardService : InputMethodService() {
             color = withAlpha(strokeColor, 230)
         }
         private val maxLengthPx = 260f * density
+        private val path = Path()
 
         fun beginRaw(rawX: Float, rawY: Float) {
             points.clear()
@@ -4484,7 +4485,7 @@ class RetuiKeyboardService : InputMethodService() {
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             if (points.size < 2) return
-            val path = Path()
+            path.reset()
             points.forEachIndexed { index, point ->
                 if (index == 0) {
                     path.moveTo(point.x, point.y)
