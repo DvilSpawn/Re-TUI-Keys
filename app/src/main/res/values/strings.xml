@@ -38,6 +38,9 @@
     <string name="setting_local_suggestions_summary">Shows offline word suggestions from this device only.</string>
     <string name="setting_browse_language_packs">Browse language packs</string>
     <string name="setting_import_language_pack">Import language pack</string>
+    <string name="setting_get_voice_packs">Get voice models</string>
+    <string name="setting_import_voice_pack">Import voice pack</string>
+    <string name="import_pack_label">Install in Re:TUI Keys</string>
     <string name="setting_clipboard_auto_save">Auto-save clipboard</string>
     <string name="setting_clipboard_auto_save_summary">Saves copied text locally while the keyboard is active.</string>
     <string name="setting_clipboard_retention_days">Clipboard clear after</string>

@@ -17,6 +17,30 @@ def releaseStoreFile = localProperties.getProperty('retui.release.storeFile')
 def releaseStorePassword = localProperties.getProperty('retui.release.storePassword')
 def releaseKeyAlias = localProperties.getProperty('retui.release.keyAlias')
 def releaseKeyPassword = localProperties.getProperty('retui.release.keyPassword')
+// On-device speech engine. The AAR is fetched once into .gradle/ (gitignored) and pinned by SHA-256
+// so the 49 MB binary never enters git.
+def sherpaOnnxVersion = '2.0.1'
+def sherpaOnnxSha256 = 'a8d09d1d32f3eb8520482c6d3d43fae674681c5b050385967c70a3c2c9bf0ee7'
+def sherpaOnnxAar = rootProject.file(".gradle/sherpa-onnx/sherpa-onnx-${sherpaOnnxVersion}.aar")
+def sha256Of = { File file ->
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+    file.eachByte(1 << 16) { buffer, length -> digest.update(buffer, 0, length) }
+    digest.digest().encodeHex().toString()
+}
+if (!sherpaOnnxAar.isFile() || sha256Of(sherpaOnnxAar) != sherpaOnnxSha256) {
+    sherpaOnnxAar.parentFile.mkdirs()
+    def partial = new File(sherpaOnnxAar.path + '.part')
+    def url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${sherpaOnnxVersion}/sherpa-onnx-${sherpaOnnxVersion}.aar"
+    logger.lifecycle("Downloading sherpa-onnx ${sherpaOnnxVersion}")
+    new URL(url).withInputStream { input -> partial.withOutputStream { it << input } }
+    def actual = sha256Of(partial)
+    if (actual != sherpaOnnxSha256) {
+        partial.delete()
+        throw new GradleException("sherpa-onnx checksum mismatch: ${actual}")
+    }
+    partial.renameTo(sherpaOnnxAar)
+}
+
 def hasReleaseSigning = [releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword].every { value ->
     value != null && !value.trim().isEmpty()
 }
@@ -31,6 +55,29 @@ android {
         targetSdk = 36
         versionCode = 32
         versionName = "0.1.31"
+    }
+
+    // GitHub releases ship one APK per CPU type. Play builds use the app bundle, which splits on its
+    // own, and AGP fails to bundle with APK splits on, so they are only enabled for APK builds.
+    def buildingBundle = gradle.startParameter.taskNames.any { it.toLowerCase(Locale.ROOT).contains('bundle') }
+    splits {
+        abi {
+            enable = !buildingBundle
+            reset()
+            include 'arm64-v8a', 'armeabi-v7a'
+            universalApk = false
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // Compressed native libraries keep the GitHub APK download near 12 MB instead of 28 MB.
+            useLegacyPackaging = true
+            // The JNI bridge only links against onnxruntime; the C and C++ APIs are unused.
+            excludes += ['**/libsherpa-onnx-c-api.so', '**/libsherpa-onnx-cxx-api.so']
+            // ARM only: x86 Android devices are rare and Chromebooks run ARM apps via translation.
+            excludes += ['lib/x86/**', 'lib/x86_64/**']
+        }
     }
 
     signingConfigs {
@@ -71,6 +118,7 @@ dependencies {
     implementation project(':retui-contract')
     implementation("androidx.activity:activity:1.13.0")
     implementation("androidx.core:core:1.17.0")
+    implementation(files(sherpaOnnxAar))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
 }

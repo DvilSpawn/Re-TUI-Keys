@@ -144,6 +144,9 @@ class RetuiKeyboardService : InputMethodService() {
     private var voiceButton: ImageButton? = null
     private var voiceListening = false
     private var acceptVoiceResult = false
+    private var voiceRecorder: VoiceRecorder? = null
+    private var voiceSessionId = 0
+    private val voiceExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     private val voiceRecognitionListener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) = Unit
@@ -164,16 +167,7 @@ class RetuiKeyboardService : InputMethodService() {
             val shouldCommit = acceptVoiceResult
             finishVoiceSession()
             if (!shouldCommit) return
-            val text = results
-                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                ?.firstOrNull()
-                ?.trim()
-                .orEmpty()
-            if (text.isEmpty()) return
-            currentInputConnection?.commitText(text, 1)
-            localWordBeforeCursor = ""
-            pendingAddWord = null
-            refreshSuggestionStripSoon()
+            commitVoiceText(results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull())
         }
 
         override fun onPartialResults(partialResults: Bundle?) = Unit
@@ -247,6 +241,8 @@ class RetuiKeyboardService : InputMethodService() {
         cancelVoiceInput()
         speechRecognizer?.destroy()
         speechRecognizer = null
+        voiceExecutor.execute { LocalVoiceRecognizer.release() }
+        voiceExecutor.shutdown()
         dismissActiveKeyPreview()
         stopRepeat()
         cancelSuggestionRefresh()
@@ -811,7 +807,7 @@ class RetuiKeyboardService : InputMethodService() {
             voiceListening -> {
                 voiceListening = false
                 updateVoiceButton()
-                speechRecognizer?.stopListening()
+                if (voiceRecorder != null) finishLocalRecording() else speechRecognizer?.stopListening()
             }
             acceptVoiceResult -> cancelVoiceInput()
             else -> startVoiceInput()
@@ -827,7 +823,12 @@ class RetuiKeyboardService : InputMethodService() {
             })
             return
         }
-        val engine = VoiceEngines.selected(this, prefs)
+        val choice = VoiceEngines.selected(this, prefs)
+        if (choice is VoiceEngines.Choice.Local) {
+            startLocalVoiceInput(choice.pack)
+            return
+        }
+        val engine = (choice as? VoiceEngines.Choice.Service)?.engine
         if (engine == null && !SpeechRecognizer.isRecognitionAvailable(this)) {
             Toast.makeText(this, "Voice typing unavailable", Toast.LENGTH_SHORT).show()
             return
@@ -859,8 +860,68 @@ class RetuiKeyboardService : InputMethodService() {
         }
     }
 
+    private fun startLocalVoiceInput(pack: VoicePack) {
+        val session = ++voiceSessionId
+        val recorder = VoiceRecorder(LocalVoiceRecognizer.maxSeconds(pack)) {
+            repeatHandler.post { if (session == voiceSessionId && voiceListening) toggleVoiceInput() }
+        }
+        if (!recorder.start()) {
+            Toast.makeText(this, "Microphone unavailable", Toast.LENGTH_SHORT).show()
+            return
+        }
+        voiceRecorder = recorder
+        acceptVoiceResult = true
+        voiceListening = true
+        updateVoiceButton()
+        // Load the model while the user is still talking so only decoding is left afterwards.
+        voiceExecutor.execute { runCatching { LocalVoiceRecognizer.preload(pack) } }
+        localVoicePack = pack
+    }
+
+    private var localVoicePack: VoicePack? = null
+
+    private fun finishLocalRecording() {
+        val recorder = voiceRecorder ?: return
+        val pack = localVoicePack ?: return
+        voiceRecorder = null
+        val session = voiceSessionId
+        val samples = recorder.stop()
+        voiceExecutor.execute {
+            val text = try {
+                LocalVoiceRecognizer.transcribe(pack, samples)
+            } catch (error: Throwable) {
+                repeatHandler.post {
+                    if (session == voiceSessionId) finishVoiceSession()
+                    Toast.makeText(this, "Voice model failed to load", Toast.LENGTH_SHORT).show()
+                }
+                return@execute
+            }
+            repeatHandler.post {
+                if (session != voiceSessionId || !acceptVoiceResult) return@post
+                finishVoiceSession()
+                if (text.isEmpty()) {
+                    Toast.makeText(this, "No speech recognized", Toast.LENGTH_SHORT).show()
+                } else {
+                    commitVoiceText(text)
+                }
+            }
+        }
+    }
+
+    private fun commitVoiceText(raw: String?) {
+        val text = raw?.trim().orEmpty()
+        if (text.isEmpty()) return
+        currentInputConnection?.commitText(text, 1)
+        localWordBeforeCursor = ""
+        pendingAddWord = null
+        refreshSuggestionStripSoon()
+    }
+
     private fun cancelVoiceInput() {
         val wasActive = acceptVoiceResult
+        voiceSessionId++
+        voiceRecorder?.stop()
+        voiceRecorder = null
         finishVoiceSession()
         if (wasActive) speechRecognizer?.cancel()
     }

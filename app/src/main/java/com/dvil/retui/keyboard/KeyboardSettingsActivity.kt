@@ -75,6 +75,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
     private lateinit var backgroundPicker: ActivityResultLauncher<Intent>
     private lateinit var fontPicker: ActivityResultLauncher<Intent>
     private lateinit var languagePackPicker: ActivityResultLauncher<Intent>
+    private lateinit var voicePackPicker: ActivityResultLauncher<Intent>
     private lateinit var profileBackupPicker: ActivityResultLauncher<Intent>
     private lateinit var profileRestorePicker: ActivityResultLauncher<Intent>
     private var theme = SettingsTheme()
@@ -185,6 +186,10 @@ class KeyboardSettingsActivity : ComponentActivity() {
         languagePackPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val uri = result.data?.data
             if (result.resultCode == RESULT_OK && uri != null) importLanguagePack(uri)
+        }
+        voicePackPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val uri = result.data?.data
+            if (result.resultCode == RESULT_OK && uri != null) importVoicePack(uri)
         }
         profileBackupPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val uri = result.data?.data
@@ -1267,20 +1272,85 @@ class KeyboardSettingsActivity : ComponentActivity() {
 
     private fun addVoiceEngineControls(parent: LinearLayout) {
         val selected = VoiceEngines.selected(this, prefs)
-        val status = terminalLabel("ENGINE: ${selected?.label ?: "System default"}", TEXT_MEDIUM_SP, bold = true)
+        val status = terminalLabel("ENGINE: ${VoiceEngines.label(selected)}", TEXT_MEDIUM_SP, bold = true)
         status.setTextColor(settingsAccentColor)
         status.gravity = Gravity.CENTER
         parent.addView(status, LinearLayout.LayoutParams(-1, dp(38)))
 
-        fun choose(engine: VoiceEngines.Engine?) {
-            VoiceEngines.select(prefs, engine)
+        fun choose(choice: VoiceEngines.Choice) {
+            VoiceEngines.select(prefs, choice)
             expandedSections.add("VOICE INPUT")
             rebuildRows()
         }
-        if (selected != null) addCommandButton(parent, "Use system default") { choose(null) }
-        VoiceEngines.installed(this).filter { it.component != selected?.component }.forEach { engine ->
-            addCommandButton(parent, "Use ${engine.label}") { choose(engine) }
+        if (selected != VoiceEngines.Choice.SystemDefault) {
+            addCommandButton(parent, "Use system default") { choose(VoiceEngines.Choice.SystemDefault) }
         }
+        val activePackId = (selected as? VoiceEngines.Choice.Local)?.pack?.id
+        VoicePackManager.installed(this).forEach { pack ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val active = pack.id == activePackId
+            val use = commandButton(if (active) "Using ${pack.name}" else "Use ${pack.name}")
+            use.isEnabled = !active
+            use.alpha = if (active) 0.7f else 1f
+            use.setOnClickListener { choose(VoiceEngines.Choice.Local(pack)) }
+            row.addView(use, LinearLayout.LayoutParams(0, dp(44), 1f))
+
+            val delete = commandButton("DEL")
+            delete.contentDescription = "Delete ${pack.name} voice pack"
+            delete.setOnClickListener {
+                if (VoicePackManager.delete(this, pack.id)) {
+                    if (active) VoiceEngines.select(prefs, VoiceEngines.Choice.SystemDefault)
+                    expandedSections.add("VOICE INPUT")
+                    toast("DELETED ${pack.name}")
+                    rebuildRows()
+                } else {
+                    toast("FAILED TO DELETE ${pack.name}")
+                }
+            }
+            val deleteParams = LinearLayout.LayoutParams(dp(64), dp(44))
+            deleteParams.leftMargin = dp(6)
+            row.addView(delete, deleteParams)
+
+            val rowParams = LinearLayout.LayoutParams(-1, dp(44))
+            rowParams.setMargins(0, dp(5), 0, dp(3))
+            parent.addView(row, rowParams)
+        }
+        val activeService = (selected as? VoiceEngines.Choice.Service)?.engine?.component
+        VoiceEngines.installed(this).filter { it.component != activeService }.forEach { engine ->
+            addCommandButton(parent, "Use ${engine.label}") { choose(VoiceEngines.Choice.Service(engine)) }
+        }
+        addCommandButton(parent, getString(R.string.setting_get_voice_packs)) {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(VOICE_PACKS_URL)))
+            } catch (_: Exception) {
+                toast("NO BROWSER AVAILABLE")
+            }
+        }
+        addCommandButton(parent, getString(R.string.setting_import_voice_pack)) {
+            voicePackPicker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/zip", "application/octet-stream", "*/*"))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            })
+        }
+    }
+
+    private fun importVoicePack(uri: Uri) {
+        toast("INSTALLING VOICE PACK…")
+        val appContext = applicationContext
+        Thread {
+            val result = PackImports.installVoicePack(appContext, prefs, uri)
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                toast(result.uppercase(Locale.US))
+                expandedSections.add("VOICE INPUT")
+                rebuildRows()
+            }
+        }.start()
     }
 
     private fun addLanguagePackControls(parent: LinearLayout) {
@@ -3120,6 +3190,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         private const val TEXT_SMALL_SP = 11f
         private const val TEXT_MEDIUM_SP = 12f
         private const val TEXT_LARGE_SP = 15f
+        private const val VOICE_PACKS_URL = "https://github.com/DvilSpawn/Re-TUI-Keys/blob/main/VOICE_PACKS.md"
         private const val LANGUAGE_PACKS_URL = "https://github.com/DvilSpawn/Re-TUI-Keys/blob/main/LANGUAGE_PACKS.md"
         private val PRIMARY_ACTIONS = setOf("APPLY", "SAVE", "DONE", "CONFIRM", "COMMIT")
 
