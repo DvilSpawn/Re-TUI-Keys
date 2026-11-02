@@ -9,7 +9,7 @@ storage with manual backup and restore.
 
 ## Current Status
 
-- Version: `0.1.20`
+- Version: `0.1.31`
 - Package: `com.dvil.retui.keyboard`
 - Minimum Android version: API 26
 - Target Android version: API 36
@@ -20,7 +20,7 @@ storage with manual backup and restore.
 - Kotlin
 - Native Android `InputMethodService`
 - Programmatic Android Views for the keyboard and settings UI
-- Gradle Android Plugin `8.5.2`
+- Gradle Android Plugin `8.10.0`
 - Kotlin plugin `2.2.10`
 - Android `SharedPreferences` for local settings and dictionary storage
 - Android Storage Access Framework for dictionary backup and restore
