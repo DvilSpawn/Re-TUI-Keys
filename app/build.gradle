@@ -17,29 +17,33 @@ def releaseStoreFile = localProperties.getProperty('retui.release.storeFile')
 def releaseStorePassword = localProperties.getProperty('retui.release.storePassword')
 def releaseKeyAlias = localProperties.getProperty('retui.release.keyAlias')
 def releaseKeyPassword = localProperties.getProperty('retui.release.keyPassword')
-// On-device speech engine. The AAR is fetched once into .gradle/ (gitignored) and pinned by SHA-256
-// so the 49 MB binary never enters git.
+// On-device speech engine and voice activity detector. Both are fetched once into .gradle/
+// (gitignored) and pinned by SHA-256 so the binaries never enter git.
 def sherpaOnnxVersion = '2.0.1'
-def sherpaOnnxSha256 = 'a8d09d1d32f3eb8520482c6d3d43fae674681c5b050385967c70a3c2c9bf0ee7'
 def sherpaOnnxAar = rootProject.file(".gradle/sherpa-onnx/sherpa-onnx-${sherpaOnnxVersion}.aar")
+def voiceAssetsDir = rootProject.file('.gradle/voice-assets')
 def sha256Of = { File file ->
     def digest = java.security.MessageDigest.getInstance('SHA-256')
     file.eachByte(1 << 16) { buffer, length -> digest.update(buffer, 0, length) }
     digest.digest().encodeHex().toString()
 }
-if (!sherpaOnnxAar.isFile() || sha256Of(sherpaOnnxAar) != sherpaOnnxSha256) {
-    sherpaOnnxAar.parentFile.mkdirs()
-    def partial = new File(sherpaOnnxAar.path + '.part')
-    def url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${sherpaOnnxVersion}/sherpa-onnx-${sherpaOnnxVersion}.aar"
-    logger.lifecycle("Downloading sherpa-onnx ${sherpaOnnxVersion}")
+def fetchPinned = { String url, String sha256, File target ->
+    if (target.isFile() && sha256Of(target) == sha256) return
+    target.parentFile.mkdirs()
+    def partial = new File(target.path + '.part')
+    logger.lifecycle("Downloading ${url}")
     new URL(url).withInputStream { input -> partial.withOutputStream { it << input } }
     def actual = sha256Of(partial)
-    if (actual != sherpaOnnxSha256) {
+    if (actual != sha256) {
         partial.delete()
-        throw new GradleException("sherpa-onnx checksum mismatch: ${actual}")
+        throw new GradleException("Checksum mismatch for ${target.name}: ${actual}")
     }
-    partial.renameTo(sherpaOnnxAar)
+    partial.renameTo(target)
 }
+fetchPinned("https://github.com/k2-fsa/sherpa-onnx/releases/download/v${sherpaOnnxVersion}/sherpa-onnx-${sherpaOnnxVersion}.aar",
+        'a8d09d1d32f3eb8520482c6d3d43fae674681c5b050385967c70a3c2c9bf0ee7', sherpaOnnxAar)
+fetchPinned('https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx',
+        '9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6', new File(voiceAssetsDir, 'silero_vad.onnx'))
 
 def hasReleaseSigning = [releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword].every { value ->
     value != null && !value.trim().isEmpty()
@@ -67,6 +71,10 @@ android {
             include 'arm64-v8a', 'armeabi-v7a'
             universalApk = false
         }
+    }
+
+    sourceSets {
+        main.assets.srcDirs += voiceAssetsDir
     }
 
     packaging {

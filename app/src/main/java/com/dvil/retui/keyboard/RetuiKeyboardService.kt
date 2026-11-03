@@ -144,7 +144,9 @@ class RetuiKeyboardService : InputMethodService() {
     private var voiceButton: ImageButton? = null
     private var voiceListening = false
     private var acceptVoiceResult = false
-    private var voiceRecorder: VoiceRecorder? = null
+    private var dictation: LiveDictation? = null
+    private var dictationDraftActive = false
+    private var dictationPrefix = ""
     private var voiceSessionId = 0
     private val voiceExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
@@ -807,7 +809,7 @@ class RetuiKeyboardService : InputMethodService() {
             voiceListening -> {
                 voiceListening = false
                 updateVoiceButton()
-                if (voiceRecorder != null) finishLocalRecording() else speechRecognizer?.stopListening()
+                if (dictation != null) dictation?.stop() else speechRecognizer?.stopListening()
             }
             acceptVoiceResult -> cancelVoiceInput()
             else -> startVoiceInput()
@@ -861,51 +863,81 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun startLocalVoiceInput(pack: VoicePack) {
+        currentInputConnection?.finishComposingText()
         val session = ++voiceSessionId
-        val recorder = VoiceRecorder(LocalVoiceRecognizer.maxSeconds(pack)) {
-            repeatHandler.post { if (session == voiceSessionId && voiceListening) toggleVoiceInput() }
-        }
-        if (!recorder.start()) {
+        val live = LiveDictation(this, pack, object : LiveDictation.Listener {
+            override fun onPartial(text: String) {
+                if (session == voiceSessionId) showDictationDraft(text)
+            }
+
+            override fun onFinal(text: String) {
+                if (session == voiceSessionId) commitDictationPhrase(text)
+            }
+
+            override fun onFinished(heardSpeech: Boolean) {
+                if (session != voiceSessionId) return
+                dictation = null
+                finishVoiceSession()
+                if (!heardSpeech) Toast.makeText(this@RetuiKeyboardService, "No speech heard", Toast.LENGTH_SHORT).show()
+            }
+
+            override fun onError(message: String) {
+                if (session != voiceSessionId) return
+                dictation = null
+                clearDictationDraft()
+                finishVoiceSession()
+                Toast.makeText(this@RetuiKeyboardService, message, Toast.LENGTH_SHORT).show()
+            }
+        })
+        if (!live.start()) {
             Toast.makeText(this, "Microphone unavailable", Toast.LENGTH_SHORT).show()
             return
         }
-        voiceRecorder = recorder
+        dictation = live
+        dictationDraftActive = false
         acceptVoiceResult = true
         voiceListening = true
         updateVoiceButton()
-        // Load the model while the user is still talking so only decoding is left afterwards.
-        voiceExecutor.execute { runCatching { LocalVoiceRecognizer.preload(pack) } }
-        localVoicePack = pack
     }
 
-    private var localVoicePack: VoicePack? = null
-
-    private fun finishLocalRecording() {
-        val recorder = voiceRecorder ?: return
-        val pack = localVoicePack ?: return
-        voiceRecorder = null
-        val session = voiceSessionId
-        val samples = recorder.stop()
-        voiceExecutor.execute {
-            val text = try {
-                LocalVoiceRecognizer.transcribe(pack, samples)
-            } catch (error: Throwable) {
-                repeatHandler.post {
-                    if (session == voiceSessionId) finishVoiceSession()
-                    Toast.makeText(this, "Voice model failed to load", Toast.LENGTH_SHORT).show()
-                }
-                return@execute
-            }
-            repeatHandler.post {
-                if (session != voiceSessionId || !acceptVoiceResult) return@post
-                finishVoiceSession()
-                if (text.isEmpty()) {
-                    Toast.makeText(this, "No speech recognized", Toast.LENGTH_SHORT).show()
-                } else {
-                    commitVoiceText(text)
-                }
-            }
+    /** Shows the phrase being spoken as underlined composing text. */
+    private fun showDictationDraft(text: String) {
+        val ic = currentInputConnection ?: return
+        if (!dictationDraftActive) {
+            dictationPrefix = dictationSpacing(ic)
+            dictationDraftActive = true
         }
+        ic.setComposingText(dictationPrefix + text, 1)
+    }
+
+    private fun commitDictationPhrase(text: String) {
+        val ic = currentInputConnection ?: return
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) {
+            clearDictationDraft()
+            return
+        }
+        if (!dictationDraftActive) dictationPrefix = dictationSpacing(ic)
+        dictationDraftActive = false
+        ic.commitText(dictationPrefix + trimmed, 1)
+        localWordBeforeCursor = ""
+        pendingAddWord = null
+        refreshSuggestionStripSoon()
+    }
+
+    private fun clearDictationDraft() {
+        if (!dictationDraftActive) return
+        dictationDraftActive = false
+        currentInputConnection?.let {
+            it.setComposingText("", 1)
+            it.finishComposingText()
+        }
+    }
+
+    /** A space before the phrase unless the cursor is at the start or already after whitespace. */
+    private fun dictationSpacing(ic: android.view.inputmethod.InputConnection): String {
+        val before = ic.getTextBeforeCursor(1, 0)
+        return if (before.isNullOrEmpty() || before.last().isWhitespace()) "" else " "
     }
 
     private fun commitVoiceText(raw: String?) {
@@ -920,8 +952,9 @@ class RetuiKeyboardService : InputMethodService() {
     private fun cancelVoiceInput() {
         val wasActive = acceptVoiceResult
         voiceSessionId++
-        voiceRecorder?.stop()
-        voiceRecorder = null
+        dictation?.cancel()
+        dictation = null
+        clearDictationDraft()
         finishVoiceSession()
         if (wasActive) speechRecognizer?.cancel()
     }
