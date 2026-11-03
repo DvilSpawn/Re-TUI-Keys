@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Turns an extracted sherpa-onnx speech model folder into a Re:TUI Keys voice pack zip.
+# Turns an extracted sherpa-onnx speech model folder into a Re:TUI Keys voice pack (.retui-voice).
 # See VOICE_PACKS.md for the format and supported model types.
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
 Usage: make-voice-pack.sh --type TYPE --id ID --name NAME [--lang CODE]... [--option KEY=VALUE]...
-                          [--version N] MODEL_DIR [OUTPUT.zip]
+                          [--version N] MODEL_DIR [OUTPUT.retui-voice]
 
   --type     moonshine | whisper | transducer | sense_voice
   --id       lowercase id, e.g. moonshine-base-en
@@ -36,7 +36,7 @@ while [ $# -gt 0 ]; do
 done
 [ $# -ge 1 ] && [ -n "$type" ] && [ -n "$id" ] && [ -n "$name" ] || usage
 model_dir="$1"
-output="${2:-$id.zip}"
+output="${2:-$id-v$version.retui-voice}"
 [[ "$id" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || { echo "Invalid id: $id" >&2; exit 1; }
 [ -d "$model_dir" ] || { echo "Not a folder: $model_dir" >&2; exit 1; }
 

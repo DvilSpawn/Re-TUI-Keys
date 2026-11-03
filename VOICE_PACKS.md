@@ -5,7 +5,7 @@ recognizer. Nothing leaves the device: the keyboard still has no internet permis
 
 ## Install a pack
 
-1. Download a pack `.zip` in your browser.
+1. Download a pack `.retui-voice` file in your browser.
 2. Open it from your downloads or file manager and choose **Install in Re:TUI Keys**, or go to
    **Settings → Voice input → Import voice pack** and pick the file.
 3. The pack becomes the active engine. Tap the mic on the keyboard, speak, and tap again to insert
@@ -22,6 +22,9 @@ Switch back to Google or another installed speech app any time under **Voice inp
 
 Multilingual Whisper packs are planned.
 
+Each official pack is published as its own GitHub Release tagged `voice-pack-<id>-v<version>`
+with a single `.retui-voice` asset. Updating a pack creates a new release; older ones stay available.
+
 ## Bring your own model
 
 Any [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) offline speech model of a supported type
@@ -30,10 +33,11 @@ can be turned into a pack. Download and extract a model from the
 
 ```sh
 voice-packs/make-voice-pack.sh --type whisper --id whisper-base --name "Whisper base" \
-  --lang en --lang de --lang fr ./sherpa-onnx-whisper-base my-whisper-base.zip
+  --lang en --lang de --lang fr ./sherpa-onnx-whisper-base
 ```
 
-The script finds the model files by name, prefers int8 variants, and writes the manifest.
+The script finds the model files by name, prefers int8 variants, writes the manifest, and saves
+`<id>-v<version>.retui-voice` (here `whisper-base-v1.retui-voice`).
 Check the model's license before sharing a pack.
 
 ### Supported types
@@ -55,7 +59,7 @@ Whisper listens to at most 30 seconds per recording; other types allow 60 second
 
 ### Manifest format
 
-A pack is a zip with `manifest.json` (put it first) and the files it names, either at the root or
+A `.retui-voice` file is a zip archive with `manifest.json` (put it first) and the files it names, either at the root or
 inside one folder. Only the named files plus `LICENSE`, `NOTICE` and `README.md` are kept.
 
 ```json
