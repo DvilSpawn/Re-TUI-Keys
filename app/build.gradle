@@ -42,6 +42,9 @@ def fetchPinned = { String url, String sha256, File target ->
 }
 fetchPinned("https://github.com/k2-fsa/sherpa-onnx/releases/download/v${sherpaOnnxVersion}/sherpa-onnx-${sherpaOnnxVersion}.aar",
         'a8d09d1d32f3eb8520482c6d3d43fae674681c5b050385967c70a3c2c9bf0ee7', sherpaOnnxAar)
+def noticesDir = rootProject.file('.gradle/notices')
+fetchPinned('https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/ThirdPartyNotices.txt',
+        '0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2', new File(noticesDir, 'onnxruntime-ThirdPartyNotices.txt'))
 fetchPinned('https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx',
         '9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6', new File(voiceAssetsDir, 'silero_vad.onnx'))
 
@@ -74,7 +77,7 @@ android {
     }
 
     sourceSets {
-        main.assets.srcDirs += voiceAssetsDir
+        main.assets.srcDirs += [voiceAssetsDir, layout.buildDirectory.dir('generated/notice-assets').get().asFile]
     }
 
     packaging {
@@ -130,3 +133,16 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
 }
+
+// Ships THIRD_PARTY_NOTICES.md and every license text as assets/licenses/ for the in-app viewer.
+def noticeAssets = tasks.register('noticeAssets', Sync) {
+    from(rootProject.projectDir) { include 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'LICENSES/*' }
+    from(noticesDir)
+    from('src/main/assets/latinime') { include 'NOTICE' }
+    eachFile {
+        it.path = it.name == 'NOTICE' ? 'AOSP-LatinIME-NOTICE.txt' : it.name == 'LICENSE' ? 'Re-TUI-Keys-LICENSE.txt' : it.name
+    }
+    includeEmptyDirs = false
+    into(layout.buildDirectory.dir('generated/notice-assets/licenses'))
+}
+tasks.named('preBuild') { dependsOn(noticeAssets) }

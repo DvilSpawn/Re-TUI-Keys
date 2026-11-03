@@ -644,6 +644,10 @@ class KeyboardSettingsActivity : ComponentActivity() {
             startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
         }
 
+        addCommandButton(list, getString(R.string.setting_open_source_licenses)) {
+            showLicenses()
+        }
+
         addCommandButton(list, getString(R.string.setting_reset_layout)) {
             val editor = prefs.edit()
             KeyboardPrefs.resetLayout(editor)
@@ -1268,6 +1272,41 @@ class KeyboardSettingsActivity : ComponentActivity() {
         button.setPadding(dp(10), 0, dp(10), 0)
         button.background = buttonDrawable(primary = false)
         return button
+    }
+
+    private fun showLicenses() {
+        val files = (assets.list(LICENSES_ASSET_DIR) ?: emptyArray())
+            .sortedWith(compareBy({ it != "THIRD_PARTY_NOTICES.md" }, { it.lowercase(Locale.US) }))
+        if (files.isEmpty()) {
+            toast("NO LICENSE FILES FOUND")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.setting_open_source_licenses)
+            .setItems(files.toTypedArray()) { _, index -> showLicenseFile(files[index]) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showLicenseFile(name: String) {
+        val text = try {
+            assets.open("$LICENSES_ASSET_DIR/$name").bufferedReader(Charsets.UTF_8).use { it.readText() }
+        } catch (_: Exception) {
+            toast("CANNOT OPEN $name")
+            return
+        }
+        val body = TextView(this).apply {
+            this.text = text
+            typeface = Typeface.MONOSPACE
+            textSize = 11f
+            setTextIsSelectable(true)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+        }
+        AlertDialog.Builder(this)
+            .setTitle(name)
+            .setView(android.widget.ScrollView(this).apply { addView(body) })
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
     }
 
     private fun addVoiceEngineControls(parent: LinearLayout) {
@@ -3190,6 +3229,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         private const val TEXT_SMALL_SP = 11f
         private const val TEXT_MEDIUM_SP = 12f
         private const val TEXT_LARGE_SP = 15f
+        private const val LICENSES_ASSET_DIR = "licenses"
         private const val VOICE_PACKS_URL = "https://github.com/DvilSpawn/Re-TUI-Keys/blob/main/VOICE_PACKS.md"
         private const val LANGUAGE_PACKS_URL = "https://github.com/DvilSpawn/Re-TUI-Keys/blob/main/LANGUAGE_PACKS.md"
         private val PRIMARY_ACTIONS = setOf("APPLY", "SAVE", "DONE", "CONFIRM", "COMMIT")
