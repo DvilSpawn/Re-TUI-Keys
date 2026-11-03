@@ -15,10 +15,10 @@ Switch back to Google or another installed speech app any time under **Voice inp
 
 ## Official packs
 
-| Pack | Languages | Size | Notes |
-|---|---|---|---|
-| English (Moonshine tiny) | English | 29 MB | Fastest, good for short messages |
-| English (Moonshine base) | English | 107 MB | Recommended |
+| Pack | Languages | Size | Notes | Download |
+|---|---|---|---|---|
+| English (Moonshine base) | English | 107 MB | Recommended | [`moonshine-base-en-v1.retui-voice`](https://github.com/DvilSpawn/Re-TUI-Keys/releases/download/voice-pack-moonshine-base-en-v1/moonshine-base-en-v1.retui-voice) |
+| English (Moonshine tiny) | English | 29 MB | Fastest; for older phones | [`moonshine-tiny-en-v1.retui-voice`](https://github.com/DvilSpawn/Re-TUI-Keys/releases/download/voice-pack-moonshine-tiny-en-v1/moonshine-tiny-en-v1.retui-voice) |
 
 Multilingual Whisper packs are planned.
 

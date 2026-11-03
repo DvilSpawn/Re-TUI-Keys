@@ -9,7 +9,7 @@ storage with manual backup and restore.
 
 ## Current Status
 
-- Version: `0.1.31`
+- Version: `0.2.0`
 - Package: `com.dvil.retui.keyboard`
 - Minimum Android version: API 26
 - Target Android version: API 36
@@ -46,6 +46,8 @@ dependencies.
 - User dictionary with visible local word list in settings.
 - Manual dictionary add/remove, backup, and restore.
 - Importable data-only language packs with an in-keyboard language switcher.
+- Voice typing with the system recognizer, any installed speech app, or fully
+  on-device voice packs that transcribe live and stop on silence.
 - Theme sync from the launcher through IME-private data.
 - Optional number row, arrow row, quick period, haptics, sound, sizing, margins,
   key gaps, stroke width, and background image controls.
@@ -100,11 +102,22 @@ The in-app **Browse language packs** action opens the
 where every language links to its own GitHub Release. Deleting an installed
 pack switches the keyboard back to English.
 
-The first pack is Persian (`fa-IR`) at
-`language-packs/dist/persian-fa-IR-v1.retui-lang`. It includes an RTL Persian
+The first pack is Persian (`fa-IR`), built from `language-packs/fa-IR/` with
+`language-packs/build.sh`. It includes an RTL Persian
 layout, Persian digits and punctuation, zero-width non-joiner input, character
 normalization, and 50,000 offline completion entries. Language packs contain
 data only and cannot execute code.
+
+## Voice Typing
+
+The mic key uses Google's recognizer by default. **Voice input** in Settings can
+switch to any installed speech app or to an on-device voice pack. Voice packs are
+`.retui-voice` files holding a sherpa-onnx speech model (Moonshine, Whisper,
+Parakeet or SenseVoice); they are imported like language packs, including via
+**Open with** from a file manager. With a voice pack, text appears as you speak,
+each phrase is finalized when you pause, and dictation stops after a few seconds
+of silence. Audio never leaves the device. See [VOICE_PACKS.md](VOICE_PACKS.md)
+for official packs and how to build your own.
 
 ## Launcher Theme Bridge
 
@@ -139,10 +152,18 @@ For a minified release build:
 ./gradlew assembleRelease
 ```
 
+APK builds produce one file per CPU type in `app/build/outputs/apk/<type>/`:
+`app-arm64-v8a-*.apk` (most phones) and `app-armeabi-v7a-*.apk` (older 32-bit
+phones). For Google Play, build the app bundle with `./gradlew bundleRelease`.
+
+The first build downloads sherpa-onnx, the Silero VAD model and ONNX Runtime's
+third-party notices into `.gradle/`, each pinned by SHA-256.
+
 The debug APK is signed with the standard Android debug key and is suitable for
-sideload testing. The minified release APK is unsigned until a release signing
-configuration is added, so store distribution should use a properly signed
-release artifact.
+sideload testing. Release builds are signed when `local.properties` defines
+`retui.release.storeFile`, `retui.release.storePassword`,
+`retui.release.keyAlias` and `retui.release.keyPassword`; otherwise they are
+unsigned.
 
 ## Project Layout
 
@@ -160,6 +181,8 @@ release artifact.
 ## Privacy Model
 
 - No network permission.
+- Voice packs transcribe on the device; the microphone is used only while the
+  mic key is active.
 - No online suggestion service.
 - No telemetry.
 - No cloud backup.
