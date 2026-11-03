@@ -39,11 +39,7 @@ class LanguagePackTest {
 
     @Test
     fun persianPackRanksExactGlideGeometryPath() {
-        val packFile = listOf(
-            File("language-packs/dist/persian-fa-IR-v1.retui-lang"),
-            File("../language-packs/dist/persian-fa-IR-v1.retui-lang")
-        ).first(File::isFile)
-        val pack = LanguagePackArchive.parse(packFile.readBytes())
+        val pack = LanguagePackArchive.parse(persianPackFile().readBytes())
         val prefs = FakeSharedPreferences()
         val centers = pack.rows.flatMapIndexed { row, keys ->
             val xOffset = when (row) {
@@ -290,12 +286,25 @@ class LanguagePackTest {
         assertEquals("ru-RU", LanguagePackManager.parseFile(file)?.id)
     }
 
-    private fun persianPackFile(): File = distPackFile("persian-fa-IR-v1")
+    private fun persianPackFile(): File = sourcePackFile("fa-IR")
 
-    private fun distPackFile(name: String): File = listOf(
-        File("language-packs/dist/$name.retui-lang"),
-        File("../language-packs/dist/$name.retui-lang")
-    ).first(File::isFile)
+    /** Zips language-packs/<locale>/ the way language-packs/build.sh does; dist/ is not in git. */
+    private fun sourcePackFile(locale: String): File {
+        val source = listOf(File("language-packs/$locale"), File("../language-packs/$locale"))
+            .first { File(it, "manifest.json").isFile }
+        val pack = File.createTempFile("$locale-", ".retui-lang").apply { deleteOnExit() }
+        ZipOutputStream(pack.outputStream()).use { zip ->
+            listOf("manifest.json", "words.tsv", "NOTICE", "LICENSE")
+                .map { File(source, it) }
+                .filter(File::isFile)
+                .forEach { file ->
+                    zip.putNextEntry(ZipEntry(file.name))
+                    zip.write(file.readBytes())
+                    zip.closeEntry()
+                }
+        }
+        return pack
+    }
 
     private fun parse(manifest: String, words: List<String>): LanguagePack =
         LanguagePackArchive.parse(archive(manifest, words))
