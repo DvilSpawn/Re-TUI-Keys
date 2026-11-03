@@ -57,11 +57,12 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.dvil.retui.keyboard"
+        // Play reserved the old id after its app record was deleted; the Kotlin namespace stays.
+        applicationId = "com.dvil.retui.keys"
         minSdk = 26
         targetSdk = 36
-        versionCode = 33
-        versionName = "0.2.0"
+        versionCode = 34
+        versionName = "0.2.1"
     }
 
     // GitHub releases ship one APK per CPU type. Play builds use the app bundle, which splits on its

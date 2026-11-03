@@ -9,8 +9,9 @@ storage with manual backup and restore.
 
 ## Current Status
 
-- Version: `0.2.0`
-- Package: `com.dvil.retui.keyboard`
+- Version: `0.2.1`
+- Package: `com.dvil.retui.keys` (GitHub builds up to 0.2.0 used
+  `com.dvil.retui.keyboard`; see "Moving from 0.2.0 or earlier" below)
 - Minimum Android version: API 26
 - Target Android version: API 36
 - Distribution: GitHub Releases
@@ -134,6 +135,19 @@ theme snapshot locally.
 
 The keyboard still works without the launcher. In that case it uses its built-in
 terminal theme defaults.
+
+## Moving from 0.2.0 or earlier
+
+From 0.2.1 the app is `com.dvil.retui.keys`, the same on GitHub and Google Play.
+Android treats it as a new app, so move your data once:
+
+1. In the old keyboard, open Settings and tap **Backup keyboard profile**
+   (settings and learned words).
+2. Install 0.2.1, enable it under Android's keyboard settings, and tap
+   **Restore keyboard profile**.
+3. Re-import any language or voice packs, then uninstall the old keyboard.
+
+The Re:TUI launcher works with both package names.
 
 ## Building
 
