@@ -9,7 +9,7 @@ storage with manual backup and restore.
 
 ## Current Status
 
-- Version: `0.2.1`
+- Version: `1.0.0`
 - Package: `com.dvil.retui.keys` (GitHub builds up to 0.2.0 used
   `com.dvil.retui.keyboard`; see "Moving from 0.2.0 or earlier" below)
 - Minimum Android version: API 26
@@ -203,3 +203,5 @@ unsigned.
 - User dictionary backup and restore are explicit file-picker actions.
 
 This keeps the keyboard aligned with the local-only Re:TUI launcher model.
+
+The full policy is in [PRIVACY.md](PRIVACY.md) and in the app under Settings, System & data.

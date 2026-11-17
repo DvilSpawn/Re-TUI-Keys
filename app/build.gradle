@@ -61,8 +61,8 @@ android {
         applicationId = "com.dvil.retui.keys"
         minSdk = 26
         targetSdk = 36
-        versionCode = 34
-        versionName = "0.2.1"
+        versionCode = 40
+        versionName = "1.0.0"
     }
 
     // GitHub releases ship one APK per CPU type. Play builds use the app bundle, which splits on its
@@ -135,15 +135,17 @@ dependencies {
     testImplementation("org.json:json:20250517")
 }
 
-// Ships THIRD_PARTY_NOTICES.md and every license text as assets/licenses/ for the in-app viewer.
+// Ships THIRD_PARTY_NOTICES.md and every license text as assets/licenses/ for the in-app viewer,
+// and the privacy policy as assets/PRIVACY.md.
 def noticeAssets = tasks.register('noticeAssets', Sync) {
-    from(rootProject.projectDir) { include 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'LICENSES/*' }
+    from(rootProject.projectDir) { include 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'LICENSES/*', 'PRIVACY.md' }
     from(noticesDir)
     from('src/main/assets/latinime') { include 'NOTICE' }
     eachFile {
-        it.path = it.name == 'NOTICE' ? 'AOSP-LatinIME-NOTICE.txt' : it.name == 'LICENSE' ? 'Re-TUI-Keys-LICENSE.txt' : it.name
+        def name = it.name == 'NOTICE' ? 'AOSP-LatinIME-NOTICE.txt' : it.name == 'LICENSE' ? 'Re-TUI-Keys-LICENSE.txt' : it.name
+        it.path = name == 'PRIVACY.md' ? name : "licenses/${name}"
     }
     includeEmptyDirs = false
-    into(layout.buildDirectory.dir('generated/notice-assets/licenses'))
+    into(layout.buildDirectory.dir('generated/notice-assets'))
 }
 tasks.named('preBuild') { dependsOn(noticeAssets) }

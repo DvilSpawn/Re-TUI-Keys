@@ -148,6 +148,9 @@ class RetuiKeyboardService : InputMethodService() {
     private var dictationDraftActive = false
     private var dictationPrefix = ""
     private var voiceSessionId = 0
+    private val corrections = CorrectionTracker()
+    private var ownEditAtMs = 0L
+    private var hasSelection = false
     private val voiceExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     private val voiceRecognitionListener = object : RecognitionListener {
@@ -194,6 +197,10 @@ class RetuiKeyboardService : InputMethodService() {
 
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
         super.onStartInput(attribute, restarting)
+        if (!restarting) {
+            recordCorrection(corrections.finish())
+            corrections.reset()
+        }
         loadPersistedTheme()
         reloadLanguagePacks()
         currentInfo = attribute
@@ -203,6 +210,9 @@ class RetuiKeyboardService : InputMethodService() {
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        if (!restarting && Onboarding.shouldNoticeUpdate(prefs, Onboarding.versionCode(this))) {
+            Toast.makeText(this, R.string.update_notice, Toast.LENGTH_LONG).show()
+        }
         makeImeWindowTransparent()
         loadPersistedTheme()
         currentInfo = info
@@ -230,6 +240,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     override fun onFinishInput() {
+        recordCorrection(corrections.finish())
         cancelVoiceInput()
         dismissActiveKeyPreview()
         stopRepeat()
@@ -270,6 +281,11 @@ class RetuiKeyboardService : InputMethodService() {
         candidatesEnd: Int
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        hasSelection = newSelStart != newSelEnd
+        if (corrections.editing && !hasSelection) {
+            val ownEdit = SystemClock.uptimeMillis() - ownEditAtMs < OWN_EDIT_WINDOW_MS
+            cursorSpot()?.let { recordCorrection(corrections.onSpot(it, ownEdit)) }
+        }
         refreshSuggestionStripSoon()
     }
 
@@ -817,6 +833,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun startVoiceInput() {
+        recordCorrection(corrections.finish())
         if (currentInfo?.let(::isPasswordField) == true) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestHideSelf(0)
@@ -865,6 +882,7 @@ class RetuiKeyboardService : InputMethodService() {
     private fun startLocalVoiceInput(pack: VoicePack) {
         currentInputConnection?.finishComposingText()
         val session = ++voiceSessionId
+        val gate = VoiceFilter.gate(prefs)
         val live = LiveDictation(this, pack, object : LiveDictation.Listener {
             override fun onPartial(text: String) {
                 if (session == voiceSessionId) showDictationDraft(text)
@@ -875,6 +893,7 @@ class RetuiKeyboardService : InputMethodService() {
             }
 
             override fun onFinished(heardSpeech: Boolean) {
+                gate?.let { VoiceFilter.save(prefs, it) }
                 if (session != voiceSessionId) return
                 dictation = null
                 finishVoiceSession()
@@ -888,7 +907,7 @@ class RetuiKeyboardService : InputMethodService() {
                 finishVoiceSession()
                 Toast.makeText(this@RetuiKeyboardService, message, Toast.LENGTH_SHORT).show()
             }
-        })
+        }, gate)
         if (!live.start()) {
             Toast.makeText(this, "Microphone unavailable", Toast.LENGTH_SHORT).show()
             return
@@ -920,6 +939,7 @@ class RetuiKeyboardService : InputMethodService() {
         if (!dictationDraftActive) dictationPrefix = dictationSpacing(ic)
         dictationDraftActive = false
         ic.commitText(dictationPrefix + trimmed, 1)
+        noteInsertedWords(trimmed, CorrectionTracker.Source.VOICE)
         localWordBeforeCursor = ""
         pendingAddWord = null
         refreshSuggestionStripSoon()
@@ -944,6 +964,7 @@ class RetuiKeyboardService : InputMethodService() {
         val text = raw?.trim().orEmpty()
         if (text.isEmpty()) return
         currentInputConnection?.commitText(text, 1)
+        noteInsertedWords(text, CorrectionTracker.Source.VOICE)
         localWordBeforeCursor = ""
         pendingAddWord = null
         refreshSuggestionStripSoon()
@@ -1044,6 +1065,11 @@ class RetuiKeyboardService : InputMethodService() {
 
         if (hasActiveWord) {
             pendingAddWord = null
+            if (normalized != null) {
+                learnedCorrectionsFor(normalized).forEach { suggestion ->
+                    out.add(SuggestionChip(suggestion, suggestion, SuggestionAction.COMMIT, 1f))
+                }
+            }
             if (normalized != null && activeContainsKnownWord(normalized)) {
                 val seen = HashSet<String>()
                 activeSuggestCurrentWordAlternatives(currentWord, 3, tapPoints).forEach { suggestion ->
@@ -1092,7 +1118,7 @@ class RetuiKeyboardService : InputMethodService() {
             }
         }
 
-        return out
+        return out.distinctBy { it.action to it.word }
     }
 
     private fun addTextRows(parent: LinearLayout, landscape: Boolean) {
@@ -2548,7 +2574,10 @@ class RetuiKeyboardService : InputMethodService() {
             return
         }
         val casedCommitValue = applyActiveWordCasing(commitValue)
+        noteReplacementWord(casedCommitValue)
+        markOwnEdit()
         currentInputConnection?.commitText("$casedCommitValue ", 1)
+        noteInsertedWords(casedCommitValue, CorrectionTracker.Source.GLIDE)
         localWordBeforeCursor = ""
         pendingAddWord = null
         tapObservations.clear()
@@ -3130,7 +3159,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun panel(fill: Int, stroke: Int, radiusDp: Int, notch: Boolean = false): Drawable {
-        val strokeWidthPx = dp(layout.strokeWidthDp)
+        val strokeWidthPx = if (theme.dashedBorders || theme.cyberdeckMode) dp(layout.strokeWidthDp) else 0
         val effectiveRadiusDp = layout.cornerRadiusDp
         if (theme.cyberdeckMode && strokeWidthPx > 0 && layout.cornerRadiusDp == 0) {
             return CyberPanelDrawable(
@@ -3424,6 +3453,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun commit(value: String) {
+        markOwnEdit()
         currentInputConnection?.commitText(value, 1)
     }
 
@@ -3437,8 +3467,10 @@ class RetuiKeyboardService : InputMethodService() {
     private fun commitFromKey(value: String) {
         val finishedWord = if (isWordBoundary(value)) currentWordBeforeCursor() else null
         val finishedWordContext = if (finishedWord != null) previousWordsBeforeCurrentWord(3) else emptyList()
+        if (finishedWord != null) noteReplacementWord(finishedWord) else beginEditOfSelection()
         smartSentenceCommitText(value)?.let { smartValue ->
             commit(smartValue)
+            if (finishedWord != null) noteInsertedWords(finishedWord, CorrectionTracker.Source.TYPED)
             trackCommittedText(smartValue)
             learnFinishedWord(finishedWord)
             activeRecordAcceptedContext(finishedWord, finishedWordContext)
@@ -3454,6 +3486,7 @@ class RetuiKeyboardService : InputMethodService() {
         if (!sendTextKeyEventForMaskedField(commitValue)) {
             commit(commitValue)
         }
+        if (finishedWord != null) noteInsertedWords(finishedWord, CorrectionTracker.Source.TYPED)
         trackCommittedText(commitValue)
         learnFinishedWord(finishedWord)
         activeRecordAcceptedContext(finishedWord, finishedWordContext)
@@ -3589,6 +3622,8 @@ class RetuiKeyboardService : InputMethodService() {
         val ic = currentInputConnection ?: return
         val currentWord = currentWordBeforeCursorContext()
         val previousWords = previousWordsBeforeCurrentWord(3)
+        learnFromChosenSuggestion(currentWord.value, word)
+        markOwnEdit()
         if (currentWord.value.isNotEmpty() && !currentWord.fromLocalFallback) {
             ic.deleteSurroundingText(currentWord.value.length, 0)
         }
@@ -3732,6 +3767,12 @@ class RetuiKeyboardService : InputMethodService() {
         }
         val ic = currentInputConnection ?: return
         val selected = ic.getSelectedText(0)
+        if (corrections.watching && learnsCorrections()) {
+            cursorSpot(skipSpace = layout.deleteWholeWord, selected = selected)?.let {
+                recordCorrection(corrections.beginEdit(it))
+            }
+        }
+        markOwnEdit()
         if (!selected.isNullOrEmpty()) {
             ic.commitText("", 1)
             localWordBeforeCursor = ""
@@ -3778,6 +3819,8 @@ class RetuiKeyboardService : InputMethodService() {
         val ic = currentInputConnection ?: return
         val finishedWord = currentWordBeforeCursor()
         val finishedWordContext = previousWordsBeforeCurrentWord(3)
+        noteReplacementWord(finishedWord)
+        recordCorrection(corrections.finish())
         learnFinishedWord(finishedWord)
         activeRecordAcceptedContext(finishedWord, finishedWordContext)
         localWordBeforeCursor = ""
@@ -3887,6 +3930,7 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun learnFinishedWord(word: String?) {
         if (word.isNullOrBlank()) return
+        if (currentInfo?.let(::isPasswordField) == true) return
         val normalized = activeNormalizeWord(word) ?: return
         if (activeContainsKnownWord(normalized)) {
             pendingAddWord = null
@@ -3896,6 +3940,142 @@ class RetuiKeyboardService : InputMethodService() {
             return
         }
         pendingAddWord = normalized
+    }
+
+    // ---- Learned corrections ----
+
+    private fun learnsCorrections(): Boolean = layout.learnLocalWords && shouldOfferSuggestions()
+
+    private fun markOwnEdit() {
+        ownEditAtMs = SystemClock.uptimeMillis()
+    }
+
+    private fun wordsIn(text: String): List<String> {
+        val out = mutableListOf<String>()
+        val word = StringBuilder()
+        for (char in text) {
+            if (isWordChar(char)) {
+                word.append(char)
+            } else if (word.isNotEmpty()) {
+                out.add(word.toString().lowercase())
+                word.clear()
+            }
+        }
+        if (word.isNotEmpty()) out.add(word.toString().lowercase())
+        return out
+    }
+
+    /**
+     * The word the cursor touches and its neighbours. With [skipSpace] it is the word a whole-word
+     * delete would take; [selected] text counts as part of the word.
+     */
+    private fun cursorSpot(skipSpace: Boolean = false, selected: CharSequence? = null): CorrectionTracker.Spot? {
+        val ic = currentInputConnection ?: return null
+        val before = ic.getTextBeforeCursor(96, 0)?.toString() ?: return null
+        val after = ic.getTextAfterCursor(48, 0)?.toString().orEmpty()
+        val middle = selected?.toString().orEmpty()
+        var end = before.length
+        if (skipSpace && middle.isEmpty()) {
+            while (end > 0 && before[end - 1].isWhitespace()) end--
+        }
+        var start = end
+        while (start > 0 && isWordChar(before[start - 1])) start--
+        var tail = 0
+        if (end == before.length) {
+            while (tail < after.length && isWordChar(after[tail])) tail++
+        }
+        val word = before.substring(start, end) + middle + after.substring(0, tail)
+        return CorrectionTracker.Spot(
+            left = wordsIn(before.substring(0, start)).takeLast(2),
+            word = activeNormalizeWord(word).orEmpty(),
+            right = wordsIn(after.substring(tail)).firstOrNull(),
+            fieldEmpty = before.isEmpty() && middle.isEmpty() && after.isEmpty()
+        )
+    }
+
+    private fun recordCorrection(correction: CorrectionTracker.Correction?) {
+        correction ?: return
+        if (!learnsCorrections()) return
+        LearnedCorrections.recordCorrection(
+            prefs = prefs,
+            from = correction.from,
+            to = correction.to,
+            voice = correction.source == CorrectionTracker.Source.VOICE,
+            typed = correction.source == CorrectionTracker.Source.TYPED,
+            context = CorrectionContext(correction.previous, correction.next, currentInfo?.packageName)
+        )
+    }
+
+    /** Remembers words Keys just put in, and counts those with a learned swap as kept for now. */
+    private fun noteInsertedWords(text: String, source: CorrectionTracker.Source) {
+        if (!learnsCorrections()) return
+        val raw = wordsIn(text)
+        val words = raw.map { activeNormalizeWord(it).orEmpty() }
+        corrections.noteInserted(words.filter { it.isNotEmpty() }, source)
+        val voice = source == CorrectionTracker.Source.VOICE
+        if (words.none { it.isNotEmpty() && LearnedCorrections.hasPairs(prefs, it, voice) }) return
+        val ic = currentInputConnection ?: return
+        val before = wordsIn(ic.getTextBeforeCursor(192, 0)?.toString().orEmpty()).dropLast(raw.size)
+        val after = wordsIn(ic.getTextAfterCursor(48, 0)?.toString().orEmpty())
+        words.forEachIndexed { index, word ->
+            if (word.isEmpty()) return@forEachIndexed
+            val context = CorrectionContext(
+                previous = if (index == 0) before.lastOrNull().orEmpty() else raw[index - 1],
+                next = raw.getOrNull(index + 1) ?: after.firstOrNull().orEmpty(),
+                app = currentInfo?.packageName
+            )
+            LearnedCorrections.recordKept(prefs, word, voice, context)
+        }
+    }
+
+    /** Keys is about to put [word] where the cursor is; an open edit should see it as the replacement. */
+    private fun noteReplacementWord(word: String) {
+        if (!corrections.editing) return
+        val spot = cursorSpot() ?: return
+        recordCorrection(corrections.onSpot(spot, ownEdit = true))
+        corrections.noteWord(activeNormalizeWord(word).orEmpty())
+    }
+
+    /** Typing over a selected word replaces it, the same as deleting and retyping it. */
+    private fun beginEditOfSelection() {
+        if (!hasSelection || !corrections.watching || !learnsCorrections()) return
+        val selected = currentInputConnection?.getSelectedText(0)
+        if (selected.isNullOrEmpty()) return
+        cursorSpot(selected = selected)?.let { recordCorrection(corrections.beginEdit(it)) }
+    }
+
+    /** Picking a suggestion over a word Keys guessed is a correction of that guess. */
+    private fun learnFromChosenSuggestion(current: String, chosen: String) {
+        if (!learnsCorrections()) return
+        val from = activeNormalizeWord(current) ?: return
+        val to = activeNormalizeWord(chosen) ?: return
+        if (corrections.editing) {
+            noteReplacementWord(to)
+            return
+        }
+        val source = corrections.sourceOf(from)
+        val voice = source == CorrectionTracker.Source.VOICE
+        val guessed = source == CorrectionTracker.Source.VOICE || source == CorrectionTracker.Source.GLIDE
+        if (!guessed && !LearnedCorrections.hasPair(prefs, from, to, voice)) return
+        val spot = cursorSpot()
+        recordCorrection(
+            CorrectionTracker.Correction(
+                from = from,
+                to = to,
+                source = source ?: CorrectionTracker.Source.TYPED,
+                previous = spot?.left?.lastOrNull().orEmpty(),
+                next = spot?.right.orEmpty()
+            )
+        )
+    }
+
+    private fun learnedCorrectionsFor(word: String): List<String> {
+        if (!learnsCorrections()) return emptyList()
+        val voice = corrections.sourceOf(word) == CorrectionTracker.Source.VOICE
+        if (!LearnedCorrections.hasPairs(prefs, word, voice)) return emptyList()
+        val spot = cursorSpot() ?: return emptyList()
+        val context = CorrectionContext(spot.left.lastOrNull().orEmpty(), spot.right.orEmpty(), currentInfo?.packageName)
+        return LearnedCorrections.suggestions(prefs, word, voice, context, 2)
     }
 
     private fun refreshSuggestionStripSoon() {
@@ -4121,6 +4301,7 @@ class RetuiKeyboardService : InputMethodService() {
     }
 
     private fun activeRecordAcceptedContext(word: String?, previousWords: List<String>) {
+        if (currentInfo?.let(::isPasswordField) == true) return
         if (activeLanguagePack == null && !word.isNullOrBlank()) {
             LocalDictionary.recordAcceptedContext(prefs, word, previousWords)
         }
@@ -4975,6 +5156,7 @@ class RetuiKeyboardService : InputMethodService() {
         private const val GLIDE_TRAIL_HOLD_MS = 100L
         private const val KEY_PREVIEW_TIMEOUT_MS = 700L
         private const val ACTIVE_ADD_WORD_MIN_LENGTH = 4
+        private const val OWN_EDIT_WINDOW_MS = 400L
         private const val MAX_TAP_OBSERVATIONS = 32
         private const val SENTENCE_CONTEXT_CHARS = 128
         private const val NAV_MODE_GESTURAL = 2

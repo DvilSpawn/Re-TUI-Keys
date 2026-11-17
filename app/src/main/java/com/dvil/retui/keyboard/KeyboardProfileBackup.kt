@@ -20,6 +20,7 @@ object KeyboardProfileBackup {
         KeyboardPrefs.KEY_DELETE_WHOLE_WORD,
         KeyboardPrefs.KEY_DOUBLE_SPACE_PERIOD,
         KeyboardPrefs.KEY_LEARN_LOCAL_WORDS,
+        LearnedCorrections.KEY,
         KeyboardPrefs.KEY_LOCAL_SUGGESTIONS,
         LanguagePackManager.KEY_ACTIVE_LANGUAGE,
         KeyboardPrefs.KEY_PORTRAIT_HEIGHT_PERCENT,

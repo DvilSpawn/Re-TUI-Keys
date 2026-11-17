@@ -38,6 +38,7 @@
     <string name="setting_local_suggestions_summary">Shows offline word suggestions from this device only.</string>
     <string name="setting_browse_language_packs">Browse language packs</string>
     <string name="setting_import_language_pack">Import language pack</string>
+    <string name="setting_privacy_policy">Privacy policy</string>
     <string name="setting_open_source_licenses">Open source licenses</string>
     <string name="setting_get_voice_packs">Get voice models</string>
     <string name="setting_import_voice_pack">Import voice pack</string>
@@ -59,9 +60,10 @@
     <string name="setting_glide_diagnostics">Glide diagnostics</string>
     <string name="setting_glide_diagnostics_summary">Logs local glide traces and candidate rankings for tuning.</string>
     <string name="setting_learn_local_words">Learn local words</string>
-    <string name="setting_learn_local_words_summary">Ranks saved custom words after you use them.</string>
+    <string name="setting_learn_local_words_summary">Ranks saved custom words after you use them, and learns words you keep correcting after dictation or glide.</string>
     <string name="setting_dictionary_add_hint">word</string>
     <string name="setting_dictionary_edit">Edit user dictionary</string>
+    <string name="setting_corrections_edit">Edit learned corrections</string>
     <string name="setting_glide_training">Glide training</string>
     <string name="setting_profile_backup">Backup keyboard profile</string>
     <string name="setting_profile_restore">Restore keyboard profile</string>
@@ -79,4 +81,7 @@
     <string name="setting_input_methods">Input method settings</string>
     <string name="setting_preview_hint">$ preview</string>
     <string name="setting_reset_layout">Reset layout</string>
+    <string name="update_notice">Re:TUI Keys was updated. Open its settings to see what\'s new.</string>
+    <!-- One blank line between sections; the first line of each section is its heading. -->
+    <string name="changelog_release_highlights" formatted="false">"FIXED\n- Key borders now follow the launcher\'s borders switch.\n- Words typed in password fields are no longer learned.\n\nADDED\n- Learned corrections: fix a word twice and your fix becomes the first suggestion. Edit them under Settings, Dictionary.\n- Near voice only: on-phone voice typing skips people talking in the background.\n- Privacy policy, under Settings, System &amp; data.\n- First-install setup. Run it again from Settings, System &amp; data.\n- This page, shown once after each update."</string>
 </resources>

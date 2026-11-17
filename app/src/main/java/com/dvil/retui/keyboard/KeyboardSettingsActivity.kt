@@ -69,6 +69,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
     private lateinit var frameRenderer: LauncherFrameRenderer
     private lateinit var list: LinearLayout
     private lateinit var sectionHost: LinearLayout
+    private lateinit var footerHost: LinearLayout
     private lateinit var settingsFrame: FrameLayout
     private lateinit var previewDock: LinearLayout
     private lateinit var previewInput: EditText
@@ -84,12 +85,15 @@ class KeyboardSettingsActivity : ComponentActivity() {
     private var bottomInsetPx = 0
     private var imeInsetPx = 0
     private var dictionaryEditorOpen = false
+    private var correctionsEditorOpen = false
     private val previewHandler = Handler(Looper.getMainLooper())
     private var previewFocusRunnable: Runnable? = null
     private var previewThemeRunnable: Runnable? = null
     private var cachedSettingsFontUri: String? = null
     private var cachedSettingsTypeface: Typeface? = null
     private val expandedSections = mutableSetOf<String>()
+    private var surface = Onboarding.Surface.SETTINGS
+    private var setupPage = 0
     private val framePrefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == LauncherFrameRenderer.KEY_REVISION || key == KeyboardPrefs.KEY_ACCEPT_LAUNCHER_FRAMES) {
             if (key == KeyboardPrefs.KEY_ACCEPT_LAUNCHER_FRAMES) frameRenderer.reload()
@@ -103,11 +107,56 @@ class KeyboardSettingsActivity : ComponentActivity() {
         prefs = getSharedPreferences(KeyboardPrefs.PREFS_NAME, MODE_PRIVATE)
         frameRenderer = LauncherFrameRenderer.shared(this, prefs)
         KeyboardPrefs.migrateLayout(prefs)
+        surface = Onboarding.surfaceFor(prefs, keyboardEnabled(), Onboarding.versionCode(this))
+        setupPage = savedInstanceState?.getInt(STATE_SETUP_PAGE) ?: 0
         theme = loadSettingsTheme(intent)
         themeDraft = theme
         configureWindow()
         setContentView(settingsView())
         showPreviewKeyboard()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putInt(STATE_SETUP_PAGE, setupPage)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Returning from Android's keyboard list or chooser: refresh the step status.
+        if (hasFocus && surface == Onboarding.Surface.SETUP) {
+            if (setupPage == 0 && keyboardSelected()) setupPage = 1
+            // The launcher's look may have arrived while Keys was being switched on.
+            theme = loadSettingsTheme(intent)
+            themeDraft = theme
+            rebuildRows()
+            updateSurfaceMargins()
+            if (wantsPreview()) showPreviewKeyboard(delayMs = 80L)
+        }
+    }
+
+    private fun keyboardEnabled(): Boolean {
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        return imm.enabledInputMethodList.any { it.packageName == packageName }
+    }
+
+    private fun keyboardSelected(): Boolean =
+        Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+            ?.startsWith("$packageName/") == true
+
+    /** The preview field and keyboard only help once Keys can actually be the keyboard shown. */
+    private fun wantsPreview(): Boolean = when (surface) {
+        Onboarding.Surface.SETTINGS -> true
+        Onboarding.Surface.SETUP -> setupPage > 0
+        Onboarding.Surface.CHANGELOG -> false
+    }
+
+    private fun showSurface(next: Onboarding.Surface, page: Int = 0) {
+        surface = next
+        setupPage = page
+        rebuildRows()
+        updateSurfaceMargins()
+        if (wantsPreview()) showPreviewKeyboard(delayMs = 80L)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -296,7 +345,16 @@ class KeyboardSettingsActivity : ComponentActivity() {
         windowContent.clipToPadding = false
         windowBorder.addView(windowContent, FrameLayout.LayoutParams(-1, -1))
 
-        val title = terminalTab(getString(R.string.settings_title).uppercase(Locale.US), minWidthDp = 160)
+        if (::previewDock.isInitialized) {
+            previewDock.visibility = if (wantsPreview()) View.VISIBLE else View.GONE
+            if (!wantsPreview()) {
+                cancelPreviewCallbacks()
+                (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                    .hideSoftInputFromWindow(previewDock.windowToken, 0)
+            }
+        }
+        val titleText = if (surface == Onboarding.Surface.SETUP) "RE:TUI KEYS SETUP" else getString(R.string.settings_title).uppercase(Locale.US)
+        val title = terminalTab(titleText, minWidthDp = 160)
         val titleParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START)
         titleParams.leftMargin = dp(44)
         titleParams.topMargin = dp(8)
@@ -308,7 +366,14 @@ class KeyboardSettingsActivity : ComponentActivity() {
         closeParams.topMargin = dp(8)
         window.addView(close, closeParams)
         close.bringToFront()
-        close.setOnClickListener { finish() }
+        close.setOnClickListener {
+            when (surface) {
+                Onboarding.Surface.SETTINGS -> finish()
+                Onboarding.Surface.SETUP -> finishSetup()
+                Onboarding.Surface.CHANGELOG -> showSurface(Onboarding.Surface.SETTINGS)
+            }
+        }
+        close.contentDescription = if (surface == Onboarding.Surface.SETUP) "Skip setup" else "Close"
         bindPanelCutouts(windowBorder, title, close)
 
         val outputFrame = FrameLayout(this)
@@ -324,6 +389,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
             role = RetuiVisualContract.FRAME_ROLE_SETTINGS
         )
         windowContent.addView(outputFrame, LinearLayout.LayoutParams(-1, 0, 1f))
+        footerHost = windowContent
 
         val scroll = ScrollView(this)
         scroll.setBackgroundColor(Color.TRANSPARENT)
@@ -341,13 +407,24 @@ class KeyboardSettingsActivity : ComponentActivity() {
         sectionHost = list
         scroll.addView(list, FrameLayout.LayoutParams(-1, -2))
 
-        val settingsLabel = terminalTab("SETTINGS", minWidthDp = 104, small = true)
+        val surfaceLabel = when (surface) {
+            Onboarding.Surface.SETTINGS -> "SETTINGS"
+            Onboarding.Surface.SETUP -> "STEP ${setupPage + 1}/$SETUP_PAGES"
+            Onboarding.Surface.CHANGELOG -> "WHAT'S NEW"
+        }
+        val settingsLabel = terminalTab(surfaceLabel, minWidthDp = 104, small = true)
         val settingsLabelParams = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START)
         settingsLabelParams.leftMargin = dp(12)
         settingsLabelParams.topMargin = 0
         outputFrame.addView(settingsLabel, settingsLabelParams)
         settingsLabel.bringToFront()
         bindPanelCutouts(outputFrame, settingsLabel)
+
+        when (surface) {
+            Onboarding.Surface.SETUP -> return addSetupRows(list)
+            Onboarding.Surface.CHANGELOG -> return addChangelogRows(list)
+            Onboarding.Surface.SETTINGS -> Unit
+        }
 
         addSectionLabel(list, "KEYS & ROWS")
         addTerminalToggle(
@@ -498,6 +575,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
 
         addSectionLabel(list, "VOICE INPUT")
         addVoiceEngineControls(list)
+        addVoiceFilterControls(list)
 
         addSectionLabel(list, "CLIPBOARD")
         addTerminalToggle(
@@ -640,8 +718,15 @@ class KeyboardSettingsActivity : ComponentActivity() {
         addSectionLabel(list, "SYSTEM & DATA")
         addProfileControls(list)
 
+        addCommandButton(list, "What's new") { showSurface(Onboarding.Surface.CHANGELOG) }
+        addCommandButton(list, "Run setup again") { showSurface(Onboarding.Surface.SETUP) }
+
         addCommandButton(list, getString(R.string.setting_input_methods)) {
             startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+        }
+
+        addCommandButton(list, getString(R.string.setting_privacy_policy)) {
+            showAssetText(PRIVACY_ASSET, getString(R.string.setting_privacy_policy))
         }
 
         addCommandButton(list, getString(R.string.setting_open_source_licenses)) {
@@ -1148,6 +1233,26 @@ class KeyboardSettingsActivity : ComponentActivity() {
         if (dictionaryEditorOpen) {
             addDictionaryEditor(parent)
         }
+
+        val corrections = LearnedCorrections.pairs(prefs).size
+        val learned = terminalLabel("LEARNED CORRECTIONS: $corrections", TEXT_MEDIUM_SP, bold = true)
+        learned.setTextColor(settingsAccentColor)
+        val learnedParams = LinearLayout.LayoutParams(-1, dp(30))
+        learnedParams.setMargins(0, dp(2), 0, dp(4))
+        parent.addView(learned, learnedParams)
+        addCommandButton(parent, getString(R.string.setting_corrections_edit)) {
+            correctionsEditorOpen = true
+            expandedSections.add("DICTIONARY")
+            rebuildRows()
+        }
+        if (correctionsEditorOpen) {
+            addTextListEditor(
+                parent = parent,
+                text = LearnedCorrections.editableText(prefs),
+                onSave = { text -> toast("KEPT ${LearnedCorrections.keepOnly(prefs, text)} CORRECTIONS") },
+                onClose = { correctionsEditorOpen = false }
+            )
+        }
     }
 
     private fun addProfileControls(parent: LinearLayout) {
@@ -1215,8 +1320,18 @@ class KeyboardSettingsActivity : ComponentActivity() {
     }
 
     private fun addDictionaryEditor(parent: LinearLayout) {
+        addTextListEditor(
+            parent = parent,
+            text = LocalDictionary.editableText(prefs),
+            onSave = { text -> toast("SAVED ${LocalDictionary.replaceUserWords(prefs, text).wordCount} WORDS") },
+            onClose = { dictionaryEditorOpen = false }
+        )
+    }
+
+    /** A multi-line list with SAVE and CLOSE, one entry per line. */
+    private fun addTextListEditor(parent: LinearLayout, text: String, onSave: (String) -> Unit, onClose: () -> Unit) {
         val editor = terminalDictionaryEditor()
-        editor.setText(LocalDictionary.editableText(prefs))
+        editor.setText(text)
         val editorParams = LinearLayout.LayoutParams(-1, dp(178))
         editorParams.setMargins(0, 0, 0, dp(7))
         parent.addView(editor, editorParams)
@@ -1238,16 +1353,237 @@ class KeyboardSettingsActivity : ComponentActivity() {
         actions.addView(close, closeParams)
 
         save.setOnClickListener {
-            val result = LocalDictionary.replaceUserWords(prefs, editor.text.toString())
-            dictionaryEditorOpen = false
-            toast("SAVED ${result.wordCount} WORDS")
+            onSave(editor.text.toString())
+            onClose()
             rebuildRows()
             refreshKeyboard()
         }
         close.setOnClickListener {
-            dictionaryEditorOpen = false
+            onClose()
             rebuildRows()
         }
+    }
+
+    // ---- First-install setup and "what's new" ----
+
+    private fun addStaticHeader(parent: LinearLayout, text: String) {
+        val header = terminalLabel(text.uppercase(Locale.US), TEXT_MEDIUM_SP, bold = true)
+        header.setTextColor(settingsAccentColor)
+        header.setPadding(dp(4), dp(10), dp(4), dp(4))
+        parent.addView(header, LinearLayout.LayoutParams(-1, -2))
+    }
+
+    private fun addBodyText(parent: LinearLayout, text: String, dim: Boolean = true, sizeSp: Float = TEXT_MEDIUM_SP) {
+        val body = terminalLabel(text, sizeSp, bold = !dim)
+        if (dim) body.setTextColor(settingsDimColor)
+        body.setLineSpacing(dp(3).toFloat(), 1f)
+        body.setPadding(dp(4), dp(2), dp(4), dp(6))
+        parent.addView(body, LinearLayout.LayoutParams(-1, -2))
+    }
+
+    /** A row that is one of several exclusive choices; the selected one carries the marker. */
+    private fun addChoiceRow(parent: LinearLayout, label: String, summary: String, selected: Boolean, onChoose: () -> Unit) {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(dp(8), dp(7), dp(8), dp(7))
+        row.minimumHeight = dp(48)
+        row.isClickable = true
+        row.isFocusable = true
+        row.contentDescription = "$label. ${if (selected) "Selected" else "Not selected"}. $summary"
+        row.background = panelDrawable(
+            fill = theme.rowBg,
+            stroke = if (selected) settingsAccentColor else withAlpha(theme.border, 170),
+            strokeDp = if (selected) 1.5f else 1f,
+            radiusDp = theme.moduleCornerRadiusDp,
+            notch = false,
+            role = if (selected) RetuiVisualContract.FRAME_ROLE_LIST_ITEM_SELECTED else RetuiVisualContract.FRAME_ROLE_LIST_ITEM
+        )
+        val marker = terminalLabel(if (selected) "(•)" else "( )", TEXT_MEDIUM_SP, bold = true)
+        if (selected) marker.setTextColor(settingsAccentColor) else marker.setTextColor(settingsDimColor)
+        row.addView(marker, LinearLayout.LayoutParams(dp(34), -2))
+        val copy = LinearLayout(this)
+        copy.orientation = LinearLayout.VERTICAL
+        row.addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
+        copy.addView(terminalLabel(label.uppercase(Locale.US), TEXT_MEDIUM_SP, bold = true), LinearLayout.LayoutParams(-1, dp(22)))
+        val description = terminalLabel(summary, TEXT_SMALL_SP, bold = false)
+        description.setTextColor(settingsDimColor)
+        copy.addView(description, LinearLayout.LayoutParams(-1, -2))
+        row.setOnClickListener { if (!selected) onChoose() }
+        val params = LinearLayout.LayoutParams(-1, -2)
+        params.setMargins(0, 0, 0, dp(7))
+        parent.addView(row, params)
+    }
+
+    private fun addSetupStep(parent: LinearLayout, label: String, summary: String, done: Boolean, action: String, onAction: () -> Unit) {
+        val head = LinearLayout(this)
+        head.orientation = LinearLayout.HORIZONTAL
+        head.gravity = Gravity.CENTER_VERTICAL
+        head.addView(terminalLabel(label.uppercase(Locale.US), TEXT_MEDIUM_SP, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
+        val status = terminalLabel(if (done) "[ DONE ]" else "[ TO DO ]", TEXT_SMALL_SP, bold = true)
+        status.setTextColor(if (done) settingsAccentColor else settingsDimColor)
+        head.addView(status, LinearLayout.LayoutParams(-2, -2))
+        head.setPadding(dp(4), dp(10), dp(4), dp(2))
+        parent.addView(head, LinearLayout.LayoutParams(-1, -2))
+        addBodyText(parent, summary)
+        val button = commandButton(action)
+        if (!done) button.background = buttonDrawable(primary = true)
+        button.setOnClickListener { onAction() }
+        val params = LinearLayout.LayoutParams(-1, dp(44))
+        params.setMargins(0, dp(2), 0, dp(6))
+        parent.addView(button, params)
+    }
+
+    private fun addNavRow(backLabel: String?, onBack: () -> Unit, nextLabel: String, onNext: () -> Unit) {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        if (backLabel != null) {
+            val back = commandButton(backLabel)
+            back.setOnClickListener { onBack() }
+            row.addView(back, LinearLayout.LayoutParams(0, dp(44), 1f))
+        }
+        val next = commandButton(nextLabel)
+        next.background = buttonDrawable(primary = true)
+        next.setOnClickListener { onNext() }
+        val nextParams = LinearLayout.LayoutParams(0, dp(44), 1f)
+        if (backLabel != null) nextParams.leftMargin = dp(6)
+        row.addView(next, nextParams)
+        // Pinned under the scrolling page so Back and Next never scroll out of reach.
+        val params = LinearLayout.LayoutParams(-1, dp(44))
+        params.setMargins(0, dp(8), 0, 0)
+        footerHost.addView(row, params)
+    }
+
+    private fun addSetupRows(parent: LinearLayout) {
+        prefs.edit().putBoolean(Onboarding.KEY_SETUP_STARTED, true).apply()
+        when (setupPage) {
+            0 -> addSetupKeyboardPage(parent)
+            1 -> addSetupLookPage(parent)
+            else -> addSetupVoicePage(parent)
+        }
+    }
+
+    private fun addSetupKeyboardPage(parent: LinearLayout) {
+        addBodyText(parent, "WELCOME.", dim = false, sizeSp = TEXT_LARGE_SP)
+        addBodyText(parent, "Three short steps. Everything stays on this phone: Keys has no internet permission.")
+        val enabled = keyboardEnabled()
+        addSetupStep(
+            parent, "1  Turn on Re:TUI Keys",
+            "Opens Android's keyboard list. Android shows the same warning for every keyboard you add.",
+            done = enabled, action = "Open keyboard list"
+        ) { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
+        addSetupStep(
+            parent, "2  Switch to it",
+            if (enabled) "Pick Re:TUI Keys in the chooser. This screen moves on by itself." else "Turn Keys on first, then pick it in the chooser.",
+            done = keyboardSelected(), action = "Choose keyboard"
+        ) { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker() }
+        addStaticHeader(parent, "Had Keys before?")
+        addBodyText(parent, "Restore a backup and skip the rest.")
+        addCommandButton(parent, getString(R.string.setting_profile_restore)) {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+            intent.type = "application/json"
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            profileRestorePicker.launch(intent)
+        }
+        addNavRow("Skip setup", ::finishSetup, "Next >") { showSurface(Onboarding.Surface.SETUP, 1) }
+    }
+
+    private fun addSetupLookPage(parent: LinearLayout) {
+        addStaticHeader(parent, "Look")
+        if (prefs.getBoolean(KeyboardPrefs.KEY_THEME_LAUNCHER_AVAILABLE, false)) {
+            val following = !prefs.getBoolean(KeyboardPrefs.KEY_THEME_COLORS_OVERRIDDEN, false)
+            addChoiceRow(parent, "Follow the Re:TUI launcher", "Colours, borders and font match the launcher.", following) {
+                syncColorsFromLauncher()
+            }
+            addChoiceRow(parent, "Keys' own theme", "Set colours yourself in Settings later.", !following) {
+                persistColorOverride(theme)
+                rebuildRows()
+            }
+        } else {
+            addBodyText(parent, "Using Keys' own theme. If you install the Re:TUI launcher, Keys picks up its look the first time you type there.")
+        }
+        addStaticHeader(parent, "Typing")
+        addTerminalToggle(parent, getString(R.string.setting_show_number_row), getString(R.string.setting_show_number_row_summary),
+            KeyboardPrefs.KEY_SHOW_NUMBER_ROW, KeyboardPrefs.DEFAULT_SHOW_NUMBER_ROW)
+        addTerminalToggle(parent, getString(R.string.setting_show_arrow_row), getString(R.string.setting_show_arrow_row_summary),
+            KeyboardPrefs.KEY_SHOW_ARROW_ROW, KeyboardPrefs.DEFAULT_SHOW_ARROW_ROW)
+        addTerminalToggle(parent, getString(R.string.setting_glide_typing), getString(R.string.setting_glide_typing_summary),
+            KeyboardPrefs.KEY_GLIDE_TYPING, KeyboardPrefs.DEFAULT_GLIDE_TYPING)
+        addTerminalToggle(parent, getString(R.string.setting_learn_local_words), getString(R.string.setting_learn_local_words_summary),
+            KeyboardPrefs.KEY_LEARN_LOCAL_WORDS, KeyboardPrefs.DEFAULT_LEARN_LOCAL_WORDS)
+        addTerminalToggle(parent, getString(R.string.setting_sound_on_keypress), getString(R.string.setting_sound_on_keypress_summary),
+            KeyboardPrefs.KEY_SOUND_ON_KEYPRESS, KeyboardPrefs.DEFAULT_SOUND_ON_KEYPRESS)
+        addTerminalToggle(parent, getString(R.string.setting_vibrate_on_keypress), getString(R.string.setting_vibrate_on_keypress_summary),
+            KeyboardPrefs.KEY_VIBRATE_ON_KEYPRESS, KeyboardPrefs.DEFAULT_VIBRATE_ON_KEYPRESS)
+        addBodyText(parent, "The keyboard below changes as you choose.")
+        addNavRow("< Back", { showSurface(Onboarding.Surface.SETUP, 0) }, "Next >") { showSurface(Onboarding.Surface.SETUP, 2) }
+    }
+
+    private fun addSetupVoicePage(parent: LinearLayout) {
+        addStaticHeader(parent, "Voice typing")
+        addBodyText(parent, "A voice pack keeps speech on this phone. Keys can't go online, so the pack downloads in your browser and opens back here.")
+        addVoiceEngineControls(parent)
+        addVoiceFilterControls(parent)
+        addStaticHeader(parent, "Microphone")
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            addBodyText(parent, "Allowed. Tap the mic key on the keyboard below to try it.")
+        } else {
+            addBodyText(parent, "Asked once. Then tap the mic key on the keyboard below to try it.")
+            addCommandButton(parent, "Allow microphone") {
+                startActivity(Intent(this, MicrophonePermissionActivity::class.java))
+            }
+        }
+        addNavRow("< Back", { showSurface(Onboarding.Surface.SETUP, 1) }, "Finish", ::finishSetup)
+    }
+
+    private fun addVoiceFilterControls(parent: LinearLayout) {
+        addStaticHeader(parent, "Other people talking")
+        val mode = VoiceFilter.mode(prefs)
+        fun choose(next: String) {
+            prefs.edit().putString(VoiceFilter.KEY, next).apply()
+            expandedSections.add("VOICE INPUT")
+            rebuildRows()
+        }
+        addChoiceRow(parent, "Near voice only", "Skips quieter talk nearby. Voice packs only.", mode == VoiceFilter.NEAR) {
+            choose(VoiceFilter.NEAR)
+        }
+        addChoiceRow(parent, "Type everything it hears", "No filtering.", mode == VoiceFilter.OFF) {
+            choose(VoiceFilter.OFF)
+        }
+    }
+
+    private fun finishSetup() {
+        Onboarding.markSetupDone(prefs, Onboarding.versionCode(this))
+        showSurface(Onboarding.Surface.SETTINGS)
+    }
+
+    private fun addChangelogRows(parent: LinearLayout) {
+        Onboarding.markChangelogSeen(prefs, Onboarding.versionCode(this))
+        addBodyText(parent, "RE:TUI KEYS ${Onboarding.versionName(this)}", dim = false, sizeSp = TEXT_LARGE_SP)
+        addStaticHeader(parent, "Your call")
+        addTerminalToggle(
+            parent = parent,
+            label = "Near voice only",
+            summary = "New. Skips quieter talk nearby.",
+            key = VoiceFilter.KEY,
+            defaultValue = true,
+            initialValue = VoiceFilter.mode(prefs) == VoiceFilter.NEAR,
+            onChanged = { on -> prefs.edit().putString(VoiceFilter.KEY, if (on) VoiceFilter.NEAR else VoiceFilter.OFF).apply() }
+        )
+        getString(R.string.changelog_release_highlights).trim().split("\n\n").forEach { section ->
+            val lines = section.trim().lines()
+            addStaticHeader(parent, lines.first().trim())
+            addBodyText(parent, lines.drop(1).joinToString("\n") { it.trim() })
+        }
+        addNavRow("Older versions", {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(RELEASES_URL)))
+            } catch (_: Exception) {
+                toast("NO BROWSER AVAILABLE")
+            }
+        }, "Continue") { showSurface(Onboarding.Surface.SETTINGS) }
     }
 
     private fun addCommandButton(parent: LinearLayout, label: String, action: () -> Unit) {
@@ -1283,16 +1619,16 @@ class KeyboardSettingsActivity : ComponentActivity() {
         }
         AlertDialog.Builder(this)
             .setTitle(R.string.setting_open_source_licenses)
-            .setItems(files.toTypedArray()) { _, index -> showLicenseFile(files[index]) }
+            .setItems(files.toTypedArray()) { _, index -> showAssetText("$LICENSES_ASSET_DIR/${files[index]}", files[index]) }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
 
-    private fun showLicenseFile(name: String) {
+    private fun showAssetText(path: String, title: String) {
         val text = try {
-            assets.open("$LICENSES_ASSET_DIR/$name").bufferedReader(Charsets.UTF_8).use { it.readText() }
+            assets.open(path).bufferedReader(Charsets.UTF_8).use { it.readText() }
         } catch (_: Exception) {
-            toast("CANNOT OPEN $name")
+            toast("CANNOT OPEN $title")
             return
         }
         val body = TextView(this).apply {
@@ -1303,7 +1639,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
             setPadding(dp(16), dp(8), dp(16), dp(8))
         }
         AlertDialog.Builder(this)
-            .setTitle(name)
+            .setTitle(title)
             .setView(android.widget.ScrollView(this).apply { addView(body) })
             .setPositiveButton(android.R.string.ok, null)
             .show()
@@ -2159,6 +2495,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
         theme = loadSettingsTheme(null)
         themeDraft = theme
         toast("RESTORED ${result.wordCount} WORDS / ${result.preferenceCount} SETTINGS")
+        if (surface == Onboarding.Surface.SETUP) return finishSetup()
         rebuildRows()
         refreshKeyboard()
     }
@@ -2204,7 +2541,7 @@ class KeyboardSettingsActivity : ComponentActivity() {
     }
 
     private fun showPreviewKeyboard(delayMs: Long = 250L) {
-        if (!::previewInput.isInitialized) return
+        if (!::previewInput.isInitialized || !wantsPreview()) return
         cancelPreviewCallbacks()
         previewFocusRunnable = Runnable {
             if (isFinishing || !::previewInput.isInitialized) return@Runnable
@@ -2314,7 +2651,9 @@ class KeyboardSettingsActivity : ComponentActivity() {
         if (::settingsFrame.isInitialized) {
             val params = settingsFrame.layoutParams as? FrameLayout.LayoutParams
             if (params != null) {
-                val dockHeight = if (::previewDock.isInitialized && previewDock.measuredHeight > 0) {
+                val dockHeight = if (::previewDock.isInitialized && previewDock.visibility == View.GONE) {
+                    0
+                } else if (::previewDock.isInitialized && previewDock.measuredHeight > 0) {
                     previewDock.measuredHeight
                 } else {
                     dp(78)
@@ -3229,7 +3568,11 @@ class KeyboardSettingsActivity : ComponentActivity() {
         private const val TEXT_SMALL_SP = 11f
         private const val TEXT_MEDIUM_SP = 12f
         private const val TEXT_LARGE_SP = 15f
+        private const val STATE_SETUP_PAGE = "setupPage"
+        private const val SETUP_PAGES = 3
+        private const val RELEASES_URL = "https://github.com/DvilSpawn/Re-TUI-Keys/releases"
         private const val LICENSES_ASSET_DIR = "licenses"
+        private const val PRIVACY_ASSET = "PRIVACY.md"
         private const val VOICE_PACKS_URL = "https://github.com/DvilSpawn/Re-TUI-Keys/blob/main/VOICE_PACKS.md"
         private const val LANGUAGE_PACKS_URL = "https://github.com/DvilSpawn/Re-TUI-Keys/blob/main/LANGUAGE_PACKS.md"
         private val PRIMARY_ACTIONS = setOf("APPLY", "SAVE", "DONE", "CONFIRM", "COMMIT")

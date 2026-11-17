@@ -144,7 +144,9 @@ internal object LocalVoiceRecognizer {
 internal class LiveDictation(
     private val context: Context,
     private val pack: VoicePack,
-    private val listener: Listener
+    private val listener: Listener,
+    /** When set, phrases much quieter than the user's own voice are dropped instead of typed. */
+    private val gate: NearVoiceGate? = null
 ) {
     interface Listener {
         fun onPartial(text: String)
@@ -241,7 +243,8 @@ internal class LiveDictation(
         var heardSpeech = false
 
         fun finalizePhrase() {
-            val text = LocalVoiceRecognizer.transcribe(pack, phrase.toArray())
+            val keep = gate?.finishPhrase() ?: true
+            val text = if (keep) LocalVoiceRecognizer.transcribe(pack, phrase.toArray()) else ""
             post { listener.onFinal(text) }
             phrase.clear()
             inPhrase = false
@@ -267,6 +270,7 @@ internal class LiveDictation(
                 if (speaking) {
                     lastSpeechAt = processed
                     heardSpeech = true
+                    gate?.addSpeech(samples)
                     if (!inPhrase) {
                         inPhrase = true
                         preRoll.forEach(phrase::add)
@@ -283,7 +287,7 @@ internal class LiveDictation(
                     while (preRollSize > PRE_ROLL_SECONDS * rate) preRollSize -= preRoll.removeFirst().size
                 }
             }
-            if (inPhrase && phrase.size - decodedSize >= PARTIAL_INTERVAL_SECONDS * rate) {
+            if (inPhrase && phrase.size - decodedSize >= PARTIAL_INTERVAL_SECONDS * rate && gate?.passesSoFar() != false) {
                 decodedSize = phrase.size
                 val partial = LocalVoiceRecognizer.transcribe(pack, phrase.toArray())
                 if (partial.isNotEmpty()) post { listener.onPartial(partial) }
@@ -294,6 +298,7 @@ internal class LiveDictation(
             }
         }
         if (!cancelled && inPhrase) finalizePhrase()
+        gate?.finishSession()
         return heardSpeech
     }
 
