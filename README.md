@@ -9,7 +9,7 @@ storage with manual backup and restore.
 
 ## Current Status
 
-- Version: `1.0.0`
+- Version: `1.0.1`
 - Package: `com.dvil.retui.keys` (GitHub builds up to 0.2.0 used
   `com.dvil.retui.keyboard`; see "Moving from 0.2.0 or earlier" below)
 - Minimum Android version: API 26

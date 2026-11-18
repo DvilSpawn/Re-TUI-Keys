@@ -332,7 +332,13 @@ class RetuiKeyboardService : InputMethodService() {
 
     private fun makeImeWindowTransparent() {
         window?.window?.let { imeWindow ->
-            imeWindow.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            try {
+                imeWindow.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            } catch (_: IllegalArgumentException) {
+                // The system can report a configuration change while the keyboard
+                // window exists but is not attached. The background is already
+                // recorded by then and takes effect when the window attaches.
+            }
             imeWindow.decorView?.setBackgroundColor(Color.TRANSPARENT)
         }
     }
